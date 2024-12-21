@@ -39,7 +39,7 @@ class USVEnv():
         self.island_radius_plot = config.island_radius
         self.map_size = config.map_size
         if self.do_visualize_online:
-            self.visualizer = USVEnvVisualizer(self.num_blue, self.num_red, self.island_position, self.island_radius_plot)
+            self.visualizer = USVEnvVisualizer(self.num_blue, self.num_red, self.island_position, self.island_radius_plot, self.map_size)
         if self.do_visualize_traj:
             self.visualizer_traj_data = []
             self.visualizer_traj_iter = 0

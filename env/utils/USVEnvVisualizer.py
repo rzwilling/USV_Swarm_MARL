@@ -34,6 +34,8 @@ class VisualUSV:
 
 class USVEnvVisualizer:
     def __init__(self, num_blue, num_red, island_position, island_radius, map_size=34):
+        print("=============== LINE 37 ===============")
+        print(map_size)
         self.num_blue = num_blue
         self.num_red = num_red
         self.map_size = float(map_size)
@@ -86,6 +88,8 @@ class USVEnvVisualizer:
 
 
 def USVEnvVisualizer_traj(visualizer_traj_data, island_position, island_radius, map_size, file_name):
+    print("=============== LINE 89 ===============")
+    print(map_size)
     map_size = float(map_size)
     fig, ax = plt.subplots(figsize=(8, 8))
     ax.set_xlim(-map_size / 2, map_size / 2)

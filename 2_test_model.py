@@ -9,7 +9,7 @@ from env.USVEnv import USVEnv
 from utils.logger import Logger
 from utils.config import Config
 from env.heuristic.policy_red import PigeonRed
-from env.heuristic.policy_blue import HeuristicBluePolicy
+from env.heuristic.policy_blue import HeuristicBluePolicy, SimpleActorCritic
 
 
 if __name__ == '__main__':
@@ -17,7 +17,7 @@ if __name__ == '__main__':
     # Parse arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--exp_name', type=str, default=f'Test_{random.randint(0, 1000)}')
-    parser.add_argument('--num_episode', type=int, default=10, help='Number of steps to evaluate')
+    parser.add_argument('--num_episode', type=int, default=1000, help='Number of steps to evaluate')
     parser.add_argument('--red_policy_mode', type=int, default=1, help='0: Aggressive Opponent / 1: Conservative Opponent')
     parser.add_argument('--model_path', type=str, default='results/base_744/model/model_6001.th')
     args = parser.parse_args()
@@ -37,7 +37,11 @@ if __name__ == '__main__':
 
     # Set up environment and agents
     env = USVEnv(config)
-    agent_blue = HeuristicBluePolicy(config)
+    mc = 1
+    if mc == 1:
+        agent_blue = SimpleActorCritic(config) #HeuristicBluePolicy(config) # # # #
+    elif mc == 2:
+        agent_blue = HeuristicBluePolicy(config)
     agent_red = PigeonRed(config)
 
     # Evaluation loop
@@ -49,12 +53,22 @@ if __name__ == '__main__':
         with torch.no_grad():  # Make a decision
             action_b = agent_blue.get_action(obs_b)
             action_r = agent_red.get_action(obs_r)
-        
+
         # Environment step
-        (obs_b, obs_r), _, done, _, info = env.step(action_b, action_r)
-        
+        (next_obs_b, next_obs_r), (reward_b, reward_r), done, _, info = env.step(action_b, action_r)
+        state_b, action_b2 = obs_b
+        next_state_b, next_action_b2 = next_obs_b
+
         # Check if episode has ended
-        episode_done = done.any().item() if isinstance(done, torch.Tensor) else done
+        episode_done, _, _, _ = done
+
+        # Update the agent
+        agent_blue.update(state_b, action_b, reward_b, next_state_b, episode_done)
+
+        # Assign next state
+        obs_b = next_obs_b  
+        obs_r = next_obs_r
+
 
         for info_ in info:
             if info_['seed'] <= args.num_episode:
