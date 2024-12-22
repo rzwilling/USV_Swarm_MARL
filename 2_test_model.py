@@ -64,18 +64,17 @@ if __name__ == '__main__':
         state_b, state_r = obs_b
         next_state_b, next_state_r = next_obs_b
 
-
         # Check if episode has ended
         episode_done, _, _, _ = done
 
         # Store transition and sample minibatch
-        agent_blue.replay_memory.add_to_buffer(state_b, state_r, action_b, reward_b, next_state_b, next_state_r, done)
+        agent_blue.replay_memory.add_to_buffer(state_b, state_r, action_b, reward_b, next_state_b, next_state_r, episode_done)
 
         # Update the agent
         if mc == 1:
             agent_blue.update(state_b, action_b, reward_b, next_state_b, episode_done)
         elif mc == 3:
-            if step % 100 == 0:
+            if step % 10 == 0:
                 agent_blue.update()
 
         

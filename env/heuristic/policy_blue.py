@@ -168,7 +168,6 @@ class DDPG:
             next_actions_tensor = torch.stack(next_actions, dim=-1)  # Shape will be [40, 1, 5]
             curr_actions_tensor = torch.stack(curr_actions, dim=-1)  # Shape will be [40, 1, 5]
 
-
             state_value = critic_i(state, state_r, action)
             next_state_value = critic_i(next_state, next_state_r, next_actions_tensor)
 
@@ -181,8 +180,6 @@ class DDPG:
             cri_optimizer_i.zero_grad()
             critic_loss.backward(retain_graph=True)
             cri_optimizer_i.step()
-
-            critic_update_time = time.time()
 
             # Compute actor loss (negative of expected return)
             actor_loss = -critic_i(state, state_r, curr_actions_tensor).mean()
