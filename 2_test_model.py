@@ -37,6 +37,8 @@ if __name__ == '__main__':
 
     # Set up environment and agents
     env = USVEnv(config)
+    agent_red = PigeonRed(config)
+
     mc = 4
     if mc == 1:
         agent_blue = SimpleActorCritic(config) #HeuristicBluePolicy(config) # # # #
@@ -45,10 +47,10 @@ if __name__ == '__main__':
     elif mc == 3:
         agent_blue = DDPG(config)
     elif mc == 4:
-        agent_blue = MADDPG(config)
+        agent_blue = MADDPG(config, agent_red)
 
 
-    agent_red = PigeonRed(config)
+
 
     # Evaluation loop
     time_start = time.time()
@@ -71,7 +73,9 @@ if __name__ == '__main__':
         episode_done, _, _, _ = done
 
         # Store transition and sample minibatch
-        agent_blue.replay_memory.add_to_buffer(state_b, state_r, action_b, reward_b, next_state_b, next_state_r, episode_done)
+
+        next_action_r = agent_red.get_action(next_obs_r)
+        agent_blue.replay_memory.add_to_buffer(state_b, state_r, action_b, action_r, reward_b, next_state_b, next_state_r, next_action_r, episode_done)
 
 
 

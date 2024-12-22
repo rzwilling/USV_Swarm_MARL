@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from torch.optim import Adam
 from torch_geometric.nn import GCNConv, MessagePassing
-from torch_geometric.data import Data
+from torch_geometric.data import Data, Batch
 import time
 
 from env.utils.gnn_utils import build_edge_index
@@ -123,10 +123,14 @@ class GNNWithMLP(nn.Module):
         # Initialisiere das MLP, das die Ausgabe des GNN verarbeitet
         self.mlp = MLP(in_channels=out_channels_node, out_channels=mlp_out_channels)
 
-    def forward(self, x, edge_index, edge_attr):
+    def forward(self, batch):
+        x = batch.x
+        edge_index = batch.edge_index
+        edge_attr = batch.edge_attr
         # Berechne die Ausgabe des GNN
         gnn_output = self.gnn_layer(x, edge_index, edge_attr)
         
+
         # Wende das MLP auf die GNN-Ausgabe an
         output = self.mlp(gnn_output)
         
@@ -220,8 +224,8 @@ class ReplayMemory:
         self.memory_full = False
         self.num_minibatch = config.num_minibatch
 
-    def add_to_buffer(self, state, state_r, action, reward, next_state, next_state_r, done):
-        self.memory[self.pointer] = (state, state_r, action, reward, next_state, next_state_r, done)
+    def add_to_buffer(self, state, state_r, action, action_r, reward, next_state, next_state_r, next_action_r, done):
+        self.memory[self.pointer] = (state, state_r, action, action_r, reward, next_state, next_state_r, next_action_r, done)
         self.pointer = (self.pointer + 1) % self.capacity
 
         if not self.memory_full:
@@ -241,7 +245,7 @@ class ReplayMemory:
 
 class MADDPG:
    
-    def __init__(self, config):
+    def __init__(self, config, agent_red):
         self.num_env = config.num_env
         self.num_blue = config.num_blue
         self.num_red = config.num_red
@@ -250,6 +254,7 @@ class MADDPG:
         self.gamma = config.gamma 
         self.noise = config.noise
         self.tau = config.tau
+        self.agent_red = agent_red
 
         state_dim = config.num_blue + config.num_red
         action_dim = 1 #config.action_dim
@@ -287,9 +292,6 @@ class MADDPG:
     def get_action(self, state, is_training = True):
         state_blue, state_red = state
 
-
-        # Combine the node features into a single tensor
-        # Flatten the node features
         state_b = state_blue.view(-1, state_blue.shape[-1])  # Shape: [2, 4]
         state_r = state_red.view(-1, state_red.shape[-1])  # Shape: [1, 4]
 
@@ -297,14 +299,6 @@ class MADDPG:
 
 
         edge_index, edge_attr = build_edge_index(x, self.communication_range, self.observation_range, self.attack_range)
-
-        #self.actor(x, edge_index, edge_attr)
-        #breakpoint()
-
-
-        # x (num_nodes, num_features) oder (batch_size, num_nodes, num_features)
-        # edge_index (2, num_edges), wobei num_edges die Anzahl der Kanten im Graphen ist.
-        # edge_attr: Dies sind die Merkmale der Kanten im Graphen (Edge Features). (num_edges, num_edge_features), wobei num_edge_features
 
         actions = []
 
@@ -314,7 +308,9 @@ class MADDPG:
             else:
                 noise = 0 
  
-            actions.append(model(x, edge_index, edge_attr)[i] + noise)
+            batch = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+
+            actions.append(model(batch)[i] + noise)
 
         concatenated_tensor = torch.cat(actions, dim=1)
 
@@ -327,43 +323,110 @@ class MADDPG:
                 return
 
         batch = self.replay_memory.sample()
-        state, state_r, action, rewards, next_state, next_state_r, done = zip(*batch)
+        state, state_r, action, action_r,  rewards, next_state, next_state_r, next_action_r, done = zip(*batch)
 
 
         state = torch.stack(state)
         state_r = torch.stack(state_r)
-        #action = torch.tensor(action, dtype=torch.long)
         action = torch.stack(action)
+        action_r = torch.stack(action_r)
+        next_action_r = torch.stack(next_action_r)
 
         rewards = torch.stack(rewards) # [40,1,5]
         rewards = rewards.squeeze(1).permute(1, 0).unsqueeze(-1)  # Shape [5, 40, 1]  # Shape [5, 40]
 
-
-        #reward = torch.tensor(reward, dtype=torch.float)
         next_state = torch.stack(next_state)
         next_state_r = torch.stack(next_state_r)
         done = torch.tensor([d[0] for d in done], dtype=torch.float)
         done = done.unsqueeze(1) 
 
+
+        state_blue_graph = state.squeeze(1) #state.view(-1, state.shape[-1])  # Shape: [2, 4]
+        state_red_graph = state_r.squeeze(1) # state_r.view(-1, state_r.shape[-1])  # Shape: [1, 4]
+
+        x = torch.cat([state_blue_graph, state_red_graph], dim=1)  # Shape: [3, 4]
+
+        data_list = []
+
+        # Process each item and unpack the returned values into separate lists
+        for item in torch.unbind(x, dim=0):
+            edge_index, edge_attr = build_edge_index(item, self.communication_range, self.observation_range, self.attack_range)
+            data_list.append(Data(x=item, edge_index=edge_index, edge_attr=edge_attr))
+            
+
+        for entry in data_list:
+
+
+        next_state_blue_graph = next_state.squeeze(1) #state.view(-1, state.shape[-1])  # Shape: [2, 4]
+        next_state_red_graph = next_state_r.squeeze(1) # state_r.view(-1, state_r.shape[-1])  # Shape: [1, 4]
+
+        y = torch.cat([next_state_blue_graph, next_state_red_graph], dim=1)  # Shape: [3, 4]
+        next_data_list = []
+
+
+        for item in torch.unbind(y, dim=0):
+            edge_index, edge_attr = build_edge_index(item, self.communication_range, self.observation_range, self.attack_range)
+            next_data_list.append(Data(x=item, edge_index=edge_index, edge_attr=edge_attr))
+            
+        batch_next = Batch.from_data_list(next_data_list)
+
+        action_graph = action.squeeze(1) 
+        action_r_graph = action_r.squeeze(1)
+
+
+
+
+        actions_concat = torch.cat([action_graph, action_r_graph], dim=1).unsqueeze(-1)  # Shape: [3, 4]
+
+        x_2 = torch.cat([x, actions_concat], dim=-1) 
+        data_list_critic = []
+        for item in torch.unbind(x_2, dim=0):
+            edge_index, edge_attr = build_edge_index(item, self.communication_range, self.observation_range, self.attack_range)
+            data_list_critic.append(Data(x=item, edge_index=edge_index, edge_attr=edge_attr))
+            
+        
+        batch_curr_critic = Batch.from_data_list(data_list_critic)
+
+
+
         next_actions = []
         curr_actions = []
-        for actor_i in self.actors:
-            next_actions.append(actor_i(next_state, next_state_r))
-            curr_actions.append(actor_i(state, state_r))
 
 
-        next_actions_tensor = torch.stack(next_actions, dim=-1)  # Shape will be [40, 1, 5]
+        for i, actor_i in enumerate(self.actors):
+
+            curr_actions.append(actor_i(batch_curr)[:,i])
+            next_actions.append(actor_i(batch_next)[:,i])
+
+
+
+        next_actions = torch.stack(next_actions)  # Shape will be [40, 1, 5]
+
+        #next_actions_tensor = torch.stack(next_actions, dim=-1)  # Shape will be [40, 1, 5]
         curr_actions_tensor = torch.stack(curr_actions, dim=-1)  # Shape will be [40, 1, 5]
+
+
+        next_action_r_graph = next_action_r.squeeze(1)
+
+        next_actions_concat =  torch.cat([next_actions, next_action_r_graph], dim=1).unsqueeze(-1) 
+
+        y_2 = torch.cat([y, next_actions_concat], dim=-1) 
+        next_data_list_critic = []
+        
+        for item in torch.unbind(y_2, dim=0):
+            edge_index, edge_attr = build_edge_index(item, self.communication_range, self.observation_range, self.attack_range)
+            next_data_list_critic.append(Data(x=item, edge_index=edge_index, edge_attr=edge_attr))
+            
+        
+        batch_next_critic = Batch.from_data_list(next_data_list_critic)
+
 
         
 
         for i, (actor_i, critic_i, act_optimizer_i, cri_optimizer_i, reward) in enumerate(zip(self.actors, self.critics, self.actor_optimizers, self.critic_optimizers, rewards)):
 
-            next_actions_tensor = torch.stack(next_actions, dim=-1)  # Shape will be [40, 1, 5]
-            curr_actions_tensor = torch.stack(curr_actions, dim=-1)  # Shape will be [40, 1, 5]
-
-            state_value = critic_i(state, state_r, action)
-            next_state_value = critic_i(next_state, next_state_r, next_actions_tensor)
+            state_value = critic_i(batch_curr_critic)
+            next_state_value = critic_i(batch_next_critic)
 
             target_value = reward + (1 - done) * self.gamma * next_state_value
 
@@ -383,8 +446,8 @@ class MADDPG:
             actor_loss.backward(retain_graph=True)
             act_optimizer_i.step()
 
-            next_actions[i] = actor_i(next_state, next_state_r)
-            curr_actions[i] = actor_i(state, state_r)
+            next_actions[i] = actor_i(batch_next)
+            curr_actions[i] = actor_i(batch_curr)
 
 
 
