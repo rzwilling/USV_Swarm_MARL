@@ -2,6 +2,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim import Adam
+from torch_geometric.nn import GCNConv
+from torch_geometric.data import Data
 import time
 torch.autograd.set_detect_anomaly(True)
 
@@ -50,6 +52,29 @@ class CriticNetwork(nn.Module):
         x = torch.relu(self.fc2(x))
         state_value = self.fc3(x).squeeze(-1)
         return state_value
+
+class GNNActor(nn.Module):
+    def __init__(self, state_dim, action_dim, hidden_dim = 64):
+        super(GNNActor, self).__init__()
+        # GNN 
+        self.conv1 = GCNConv(state_dim, hidden_dim)
+        self.conv2 = GCNConv(hidden_dim, hidden_dim)
+
+        # MLP 
+        
+        self.actor_fc = nn.Linear(hidden_dim, action_dim)
+        self.critic_fc = nn.Linear(hidden_dim, 1)
+    
+    def forward(self, data):
+        x, edge_index = data.x, data.edge_index
+        x = torch.relu(self.conv1(x, edge_index))
+        x = torch.relu(self.conv2(x, edge_index))
+        action_probs = torch.softmax(self.actor_fc(x), dim=-1)
+        state_value = self.critic_fc(x)
+        return action_probs, state_value
+
+
+
 
 
 class ReplayMemory:
@@ -144,6 +169,7 @@ class DDPG:
 
         rewards = torch.stack(rewards) # [40,1,5]
         rewards = rewards.squeeze(1).permute(1, 0).unsqueeze(-1)  # Shape [5, 40, 1]  # Shape [5, 40]
+
 
         #reward = torch.tensor(reward, dtype=torch.float)
         next_state = torch.stack(next_state)

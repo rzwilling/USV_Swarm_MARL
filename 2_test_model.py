@@ -70,6 +70,8 @@ if __name__ == '__main__':
         # Store transition and sample minibatch
         agent_blue.replay_memory.add_to_buffer(state_b, state_r, action_b, reward_b, next_state_b, next_state_r, episode_done)
 
+
+
         # Update the agent
         if mc == 1:
             agent_blue.update(state_b, action_b, reward_b, next_state_b, episode_done)
