@@ -9,7 +9,7 @@ from env.USVEnv import USVEnv
 from utils.logger import Logger
 from utils.config import Config
 from env.heuristic.policy_red import PigeonRed
-from env.heuristic.policy_blue import DDPG, HeuristicBluePolicy, SimpleActorCritic
+from env.heuristic.policy_blue import DDPG, MADDPG, HeuristicBluePolicy, SimpleActorCritic
 
 
 if __name__ == '__main__':
@@ -37,13 +37,16 @@ if __name__ == '__main__':
 
     # Set up environment and agents
     env = USVEnv(config)
-    mc = 3
+    mc = 4
     if mc == 1:
         agent_blue = SimpleActorCritic(config) #HeuristicBluePolicy(config) # # # #
     elif mc == 2:
         agent_blue = HeuristicBluePolicy(config)
     elif mc == 3:
         agent_blue = DDPG(config)
+    elif mc == 4:
+        agent_blue = MADDPG(config)
+
 
     agent_red = PigeonRed(config)
 
@@ -76,6 +79,9 @@ if __name__ == '__main__':
         if mc == 1:
             agent_blue.update(state_b, action_b, reward_b, next_state_b, episode_done)
         elif mc == 3:
+            if step % 10 == 0:
+                agent_blue.update()
+        elif mc == 4:
             if step % 10 == 0:
                 agent_blue.update()
 

@@ -4,7 +4,7 @@ import numpy as np
 
 class Config:
 
-    do_visualize_online = False
+    do_visualize_online = True
     do_visualize_traj = False  # when you visualize online, visualize trajectory will not work.
     do_visualize_traj_freq = 10
     root_path = 'results/temp'
@@ -47,7 +47,7 @@ class Config:
 
     ################# 3. Environment
     # General setting
-    num_blue = 2
+    num_blue = 3
     num_red = 1
     island_position = [1, 0]
     island_radius = 1.2
