@@ -99,6 +99,8 @@ class Logger():
             self.data_eval['Blue Catch'].append(info['blue catch'])
             self.data_eval['Timestep'].append(info['timestep'])
             self.iter_episode += 1
+
+        self.logger.info(f' Episode: {self.iter_episode:5d} | ' + ' | '.join([f'{key}: {item:7.3f}' for key, item in info.items()]))
         
     def log_model(self, train_results_blue=dict):
         time_dict = {'FPS': self.FPS_numerator / (time.time() - self.start)}

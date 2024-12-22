@@ -4,8 +4,8 @@ import numpy as np
 
 class Config:
 
-    do_visualize_online = True
-    do_visualize_traj = True  # when you visualize online, visualize trajectory will not work.
+    do_visualize_online = False
+    do_visualize_traj = False  # when you visualize online, visualize trajectory will not work.
     do_visualize_traj_freq = 10
     root_path = 'results/temp'
 
@@ -33,10 +33,13 @@ class Config:
     ent_coef = 0.01
     vf_coef = 0.5
     max_grad_norm = 10.
-    num_minibatch = 40
+    num_minibatch = 512 #40
+    replay_memory_capacity = 100000 # To do 
+    noise = 0.7
+    tau = 0.001
 
     gae_lambda = 0.98
-    gamma = 0.99
+    gamma = 0.8 #0.99
     use_gae = True
 
     out_channels = 16
@@ -45,7 +48,7 @@ class Config:
     ################# 3. Environment
     # General setting
     num_blue = 5
-    num_red = 1
+    num_red = 2
     island_position = [1, 0]
     island_radius = 1.2
     blue_velocity = 0.5144 / 100 * 5 * 5

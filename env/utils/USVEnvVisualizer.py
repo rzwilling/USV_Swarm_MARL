@@ -14,6 +14,8 @@ import matplotlib.pyplot as plt
 #     matplotlib.use('TkAgg') # Use 'TkAgg' backend for interactive environments
 
 
+plt.rcParams['figure.figsize'] = [8, 8]
+
 class VisualUSV:
     def __init__(self, color, scale=1):
         self.color = color
@@ -53,6 +55,8 @@ class USVEnvVisualizer:
         for usv in self.blue_usvs + self.red_usvs:
             self.ax.add_line(usv.body_plot)
             self.ax.add_artist(usv.dead_plot)
+
+        #plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
 
         plt.tight_layout()
         self.fig.canvas.draw()
