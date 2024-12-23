@@ -385,6 +385,9 @@ class MADDPG:
         data_loader = self.replay_memory.sample()
 
 
+        critic_loss_list = []
+        actor_loss_list = []
+
         for data in data_loader:
             curr_graph, action_b, action_r, reward_b, next_graph, next_action_r, done = data
 
@@ -393,16 +396,43 @@ class MADDPG:
             target_value = reward_b.T + (1 - done.T) * self.gamma * self.critic_nn(self.critic_gnn(next_graph)[:self.num_blue], self.actor_nn(self.actor_gnn(next_graph))[:self.num_blue].T )
 
             critic_loss = nn.MSELoss()(self.critic_nn(self.critic_gnn(curr_graph)[:self.num_blue], action_b), target_value)
+            critic_loss_list.append(critic_loss)
+            # self.critic_optimizer.zero_grad()
+            # critic_loss.backward()
+            # self.critic_optimizer.step()
+        print("Calculation 1 done")
 
-            self.critic_optimizer.zero_grad()
-            critic_loss.backward()
-            self.critic_optimizer.step()
+        total_critic_loss = torch.stack(critic_loss_list).mean()
+        # Update critic network
+        self.critic_optimizer.zero_grad()
+        total_critic_loss.backward()
+        self.critic_optimizer.step()
+
+        for data in data_loader:
+            curr_graph, action_b, action_r, reward_b, next_graph, next_action_r, done = data
+
+            done = done.int()
+
 
             actor_loss = -self.critic_nn(self.critic_gnn(curr_graph),  self.actor_nn(self.actor_gnn(curr_graph)).T).mean()
             
-            self.actor_optimizer.zero_grad()
-            actor_loss.backward()
-            self.actor_optimizer.step()
+            # self.actor_optimizer.zero_grad()
+            # actor_loss.backward()
+            # self.actor_optimizer.step()
+            actor_loss_list.append(actor_loss)
+
+        print("Calculation 2 done")
+
+        # Accumulate losses
+
+        total_actor_loss = torch.stack(actor_loss_list).mean()
+
+
+
+        # Update actor network
+        self.actor_optimizer.zero_grad()
+        total_actor_loss.backward()
+        self.actor_optimizer.step()
 
 
         return 
