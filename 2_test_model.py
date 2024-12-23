@@ -3,13 +3,33 @@ from os.path import join as pjoin
 import time
 import argparse
 import random
-import torch
+
 
 from env.USVEnv import USVEnv
 from utils.logger import Logger
 from utils.config import Config
 from env.heuristic.policy_red import PigeonRed
 from env.heuristic.policy_blue import DDPG, MADDPG, HeuristicBluePolicy, SimpleActorCritic
+import torch
+
+
+
+def save_maddpg_model(model, file_path):
+    # Save the state dictionaries of the models (actors and critics) and optimizers
+    state_dict = {
+        'actor_gnn': model.actor_gnn.state_dict(),
+        'actor_nn': model.actor_nn.state_dict(),
+        'critic_gnn': model.critic_gnn.state_dict(),
+        'critic_nn': model.critic_nn.state_dict(),
+        'actor_optimizer': model.actor_optimizer.state_dict(),
+        'critic_optimizer': model.critic_optimizer.state_dict(),
+        'config': model.__dict__,  # Optionally save the config if needed
+    }
+    
+    # Save the complete state
+    torch.save(state_dict, file_path)
+    print(f"Model saved to {file_path}")
+
 
 
 if __name__ == '__main__':
@@ -17,7 +37,7 @@ if __name__ == '__main__':
     # Parse arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--exp_name', type=str, default=f'Test_{random.randint(0, 1000)}')
-    parser.add_argument('--num_episode', type=int, default=20000, help='Number of steps to evaluate')
+    parser.add_argument('--num_episode', type=int, default=100, help='Number of steps to evaluate')
     parser.add_argument('--red_policy_mode', type=int, default=1, help='0: Aggressive Opponent / 1: Conservative Opponent')
     parser.add_argument('--model_path', type=str, default='results/base_744/model/model_6001.th')
     args = parser.parse_args()
@@ -93,7 +113,7 @@ if __name__ == '__main__':
             if step % 10 == 0:
                 agent_blue.update()
         elif mc == 4:
-            if step % 100 == 0:
+            if step % 10 == 0:
                 agent_blue.update()
 
         
@@ -110,6 +130,8 @@ if __name__ == '__main__':
         if args.num_episode == cnt:
                 break
     
+
+
     # Calculate and log final evaluation results
     logger.log_evaluation()
     print(f'Evaluation completed. Total time: {time.time() - time_start:.2f} seconds')

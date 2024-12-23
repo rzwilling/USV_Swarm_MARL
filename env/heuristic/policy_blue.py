@@ -68,6 +68,20 @@ class MessageUpdateFunction(nn.Module):
         # Kombiniere Knotenmerkmale und Kantenmerkmale
         combined = torch.cat([v_i, v_j, e_ij], dim=-1)
         return self.mlp(combined)
+    
+class MessageUpdateFunction2(nn.Module):
+    def __init__(self, in_channels, in_channels_edge, out_channels):
+        super(MessageUpdateFunction2, self).__init__()
+        self.mlp = torch.nn.Sequential(
+            torch.nn.Linear(in_channels * 2 + in_channels_edge, 64),  # Input size is the sum of features from vi, vj, and eji
+            torch.nn.ReLU(),
+            torch.nn.Linear(64, out_channels)  # Output size is the node feature dimension
+        )
+    def forward(self, v_i, v_j, e_ij):
+        # Kombiniere Knotenmerkmale und Kantenmerkmale
+        combined = torch.cat([v_i, v_j, e_ij], dim=-1)
+        return self.mlp(combined)
+
 
 # Knoten-Update-Funktion für das Zustands-Embedding
 class NodeUpdateFunction(nn.Module):
@@ -86,6 +100,12 @@ class GNNModel(nn.Module):
     def __init__(self, config, in_channels, out_channels):
         super(GNNModel, self).__init__()
         self.conv1 = GNNEmbeddingLayer(config, in_channels, 3, out_channels)  # Erste Convolution-Schicht
+        self.comm_layer = config.comm_layer
+        self.conv2 = nn.Linear(16*3 + 5, 16)
+
+        if self.comm_layer:
+            self.conv3 = GNNCommunicationLayer(config, in_channels + 16, 3, out_channels)  # Erste Convolution-Schicht
+            self.conv4 = nn.Linear(16 + 5, 16)
         #self.conv2 = GCNConv(16, out_channels)  # Zweite Convolution-Schicht
 
     def forward(self, data):
@@ -93,10 +113,15 @@ class GNNModel(nn.Module):
         # Erste Convolution
         x = self.conv1(data)
         x = torch.relu(x)  # Aktivierungsfunktion
-        
-        # Zweite Convolution
-        #x = self.conv2(x, edge_index, edge_attr)
+        x = self.conv2(x)
 
+        # Zweite Convolution
+        if self.comm_layer:
+            x = self.conv3(x, data)
+
+            x = torch.relu(x)
+            x = self.conv4(x)
+        
         return x
 
 
@@ -115,9 +140,22 @@ class GNNEmbeddingLayer(MessagePassing):
         # Knotenfeatures und Kantenfeatures weitergeben
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
 
-        out_edge = self.propagate(edge_index, x=x, edge_attr=edge_attr)
+        #agent_idx = [i for i, row in enumerate(x) if row[0] == 0]
+        advent_idx = [i for i, row in enumerate(x) if row[0] == 1]
+        island_idx = [i for i, row in enumerate(x) if row[0] == 2]
 
-        return out_edge
+        #agent_mask = torch.isin(edge_index[1], torch.tensor(agent_idx))
+        advent_mask = torch.isin(edge_index[1], torch.tensor(advent_idx))
+        island_mask = torch.isin(edge_index[1], torch.tensor(island_idx))
+
+
+        agent_output = self.propagate(edge_index, x=x, edge_attr=edge_attr)
+        advent_output = self.propagate(edge_index[:, advent_mask], x=x, edge_attr=edge_attr[advent_mask, :])
+        island_output = self.propagate(edge_index[:, island_mask], x=x, edge_attr=edge_attr[island_mask, :])
+
+        result = torch.cat((x, agent_output, advent_output, island_output), dim=1)
+
+        return result
 
     def message(self, x_j, x_i, edge_attr):
         # Nachrichten von den Nachbarknoten (edge_attr sind die Kantenfeatures)
@@ -127,82 +165,59 @@ class GNNEmbeddingLayer(MessagePassing):
 
         distance = edge_attr[:, 0]
         node_type = x_j[:, 0]
+        min_node_type = torch.min(node_type)
+
         mask = torch.ones_like(distance, dtype=torch.bool) 
 
-        mask[node_type == 0] = distance[node_type == 0] < self.observation_range
-        mask[node_type == 1] = distance[node_type == 1] < self.attack_range
+        if min_node_type == 0:
+            mask = distance < self.observation_range
+        elif min_node_type == 1:
+            mask = distance < self.attack_range
+        else:
+            mask = True
 
-        return mask.view(-1, 1) * message # self.message_function(x_j, edge_attr)
-
-    # def update(self, aggr_out, x):
-    #     # Aggregierte Nachrichten und Knotenmerkmale kombinieren und aktualisieren
-    #     return self.node_update_function(x, aggr_out)
-    
-
+        return mask.view(-1, 1) * message 
 
 
-    
-    # def aggregate_messages_by_range(self, node_i, edge_index, edge_attr):
-    #     """
-    #     This function aggregates messages based on the relationship type (observation, attack, land).
-        
-    #     :param node_i: The current node for which we are aggregating messages.
-    #     :param edge_index: The edge index (connections between nodes).
-    #     :param edge_attr: The edge features (can include relationship type).
-    #     :param relationship_type: The type of relationship to aggregate (observation, attack, or land).
-    #     :return: Aggregated messages from the neighbors in the specified range.
-    #     """
-    #     # Filter the edges by the relationship type (observation, attack, land)
-    #     filtered_edges = edge_attr[edge_index[0] == node_i]
-
-    #     # For each relationship type, aggregate the incoming messages
-    #     aggregated_messages = {
-    #         "observation": [],
-    #         "attack": [],
-    #         "land": []
-    #     }
-
-    #     # Example: Filter based on the relationship type and aggregate accordingly
-    #     for idx, edge in enumerate(filtered_edges):
-    #         # Assuming the edge_attr contains the relationship type
-    #         if edge["relationship_type"] == "observation":
-    #             aggregated_messages["observation"].append(edge)
-    #         elif edge["relationship_type"] == "attack":
-    #             aggregated_messages["attack"].append(edge)
-    #         elif edge["relationship_type"] == "land":
-    #             aggregated_messages["land"].append(edge)
-
-    #     # Return aggregated messages for each type (observation, attack, land)
-    #     return aggregated_messages
-
+   
 #GNN Layer für die Kantenaktualisierung und Knotenaktualisierung
 class GNNCommunicationLayer(MessagePassing):
     def __init__(self, config, in_channels_node, in_channels_edge, out_channels_node):
         super(GNNCommunicationLayer, self).__init__(aggr='sum') 
 
-        self.message_function = MessageUpdateFunction(in_channels_node, in_channels_edge, out_channels_node)
+        self.message_function = MessageUpdateFunction2(in_channels_node, in_channels_edge, out_channels_node)
         #self.node_update_function = NodeUpdateFunction(in_channels_node, out_channels_node)
         self.observation_range = config.blue_detect_range
         self.attack_range = config.attack_range
         self.communication_range = config.communication_range
 
-    def forward(self, x, edge_index, edge_attr):
+    def forward(self, output_x, data):
         # Knotenfeatures und Kantenfeatures weitergeben
-        out_edge = self.propagate(edge_index, x=x, edge_attr=edge_attr)
 
-        return out_edge
+        x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+        z = torch.cat((data.x,output_x), dim=1)
 
-    def message(self, x_j, edge_attr):
+
+        agent_idx = [i for i, row in enumerate(x) if row[0] == 0]
+        agent_mask = torch.isin(edge_index[1], torch.tensor(agent_idx))
+        agent_output = self.propagate(edge_index[:, agent_mask], x = z, edge_attr=edge_attr[agent_mask, :])
+
+        result = torch.cat((x, agent_output), dim=1)
+
+        return result
+
+    def message(self, x_j, x_i, edge_attr):
         # Nachrichten von den Nachbarknoten (edge_attr sind die Kantenfeatures)
-        distance, bearing, relative_orientation, node_type = edge_attr
+        #distance, bearing, relative_orientation = edge_attr
 
-        if node_type == 'agent':
-            mask = distance < self.communication_range
-        else:
-            mask = False            
+        message = self.message_function(x_i, x_j, edge_attr)
+        distance = edge_attr[:, 0]
 
-        return mask.view(-1, 1) * x_j # self.message_function(x_j, edge_attr)
+        mask = torch.ones_like(distance, dtype=torch.bool) 
 
+        mask = distance < self.communication_range
+
+        return mask.view(-1, 1) * message 
 
 class MLP(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -236,28 +251,6 @@ class MLP_Q(nn.Module):
 
 
 
-class GNNWithMLP(nn.Module):
-    def __init__(self, num_features, num_edge_features, out_channels_node, mlp_out_channels):
-        super(GNNWithMLP, self).__init__()
-        # Initialisiere GNN Layer
-        self.gnn_layer = GNNLayer(in_channels_node=num_features, in_channels_edge=num_edge_features, out_channels_node=out_channels_node)
-        
-        # Initialisiere das MLP, das die Ausgabe des GNN verarbeitet
-        self.mlp = MLP(in_channels=out_channels_node, out_channels=mlp_out_channels)
-
-    def forward(self, batch):
-        x = batch.x
-        edge_index = batch.edge_index
-        edge_attr = batch.edge_attr
-        # Berechne die Ausgabe des GNN
-        gnn_output = self.gnn_layer(x, edge_index, edge_attr)
-        
-
-        # Wende das MLP auf die GNN-Ausgabe an
-        output = self.mlp(gnn_output)
-        
-        return output
-    
 
 class ReplayMemory:
     def __init__(self, config):
@@ -311,26 +304,15 @@ class MADDPG:
         num_edge_features = 3
         out_channels_node = 16
         mlp_out_channels = 1
+        self.team_reward_layer = config.team_reward_layer
 
 
         self.actor_gnn = GNNModel(config, num_features + 1, out_channels_node)
-
-
-        curr_nodes = [Node(i, "agent", obs_b[0][0][i]) for i in range(len(obs_b[0][0]))]
-        curr_nodes += [Node(i + self.num_blue, "adversarial", obs_b[1][0][i]) for i in range(len(obs_b[1][0]))]
-        curr_nodes += [Node(self.num_blue + self.num_red, "land", config.island_position + [0,1])]
-
-        edge_index, edge_attr = initialize_edge_features(curr_nodes)
-        node_tensors = torch.stack([node.to_tensor() for node in curr_nodes])
-        data = Data(x=node_tensors, edge_index=edge_index, edge_attr=edge_attr)
-  
-        
-
         self.actor_nn = MLP(in_channels=out_channels_node, out_channels=mlp_out_channels)
-        self.critic_gnn = GNNModel(config, num_features +1, out_channels_node)
+        self.critic_gnn = GNNModel(config, num_features + 1, out_channels_node)
         self.critic_nn = MLP_Q(in_channels=out_channels_node, out_channels=mlp_out_channels)
-        self.actor_optimizer = Adam(list(self.actor_nn.parameters()), lr=config.lr_actor)
-        self.critic_optimizer = Adam(list(self.critic_nn.parameters()), lr=config.lr_critic)
+        self.actor_optimizer = Adam(list(self.actor_nn.parameters()) + list(self.actor_gnn.parameters()), lr=config.lr_actor)
+        self.critic_optimizer = Adam(list(self.critic_nn.parameters()) + list(self.critic_gnn.parameters()), lr=config.lr_critic)
 
         self.replay_memory = ReplayMemory(config)
      
@@ -393,16 +375,18 @@ class MADDPG:
 
             done = done.int()
 
-            target_value = reward_b.T + (1 - done.T) * self.gamma * self.critic_nn(self.critic_gnn(next_graph)[:self.num_blue], self.actor_nn(self.actor_gnn(next_graph))[:self.num_blue].T )
+
+            target_value = reward_b.T + (1 - done.T) * self.gamma * self.critic_nn(self.critic_gnn(next_graph)[:self.num_blue], (self.actor_nn(self.actor_gnn(next_graph)[:self.num_blue])).T )
+
+            if self.team_reward_layer:
+                total_sum = reward_b.sum()
+                target_value += 0.2 * total_sum
 
             critic_loss = nn.MSELoss()(self.critic_nn(self.critic_gnn(curr_graph)[:self.num_blue], action_b), target_value)
             critic_loss_list.append(critic_loss)
-            # self.critic_optimizer.zero_grad()
-            # critic_loss.backward()
-            # self.critic_optimizer.step()
-        print("Calculation 1 done")
 
         total_critic_loss = torch.stack(critic_loss_list).mean()
+
         # Update critic network
         self.critic_optimizer.zero_grad()
         total_critic_loss.backward()
@@ -416,17 +400,13 @@ class MADDPG:
 
             actor_loss = -self.critic_nn(self.critic_gnn(curr_graph),  self.actor_nn(self.actor_gnn(curr_graph)).T).mean()
             
-            # self.actor_optimizer.zero_grad()
-            # actor_loss.backward()
-            # self.actor_optimizer.step()
+
             actor_loss_list.append(actor_loss)
 
-        print("Calculation 2 done")
 
         # Accumulate losses
 
         total_actor_loss = torch.stack(actor_loss_list).mean()
-
 
 
         # Update actor network
@@ -437,222 +417,6 @@ class MADDPG:
 
         return 
     
-        # Unpack data
-        state = torch.stack(state)
-        state_r = torch.stack(state_r)
-        action = torch.stack(action)
-        action_r = torch.stack(action_r)
-        next_action_r = torch.stack(next_action_r)
-
-        rewards = torch.stack(rewards) # [40,1,5]
-        rewards = rewards.squeeze(1).permute(1, 0).unsqueeze(-1)  # Shape [5, 40, 1]  # Shape [5, 40]
-        rewards = rewards.permute(1, 0, 2).squeeze(2)
-
-        next_state = torch.stack(next_state)
-        next_state_r = torch.stack(next_state_r)
-        state_blue_graph = state.squeeze(1)
-        state_red_graph = state_r.squeeze(1)
-
-        done = torch.tensor([d[0] for d in done], dtype=torch.float)
-        done = done.unsqueeze(1) 
-        # Actions for current states
-        # batch_curr_actions = []
-        x = torch.cat([state_blue_graph, state_red_graph], dim=1)
-
-
-        # Actuibs fir next states
-        print("CHECK 2")
-
-        next_state_blue_graph = next_state.squeeze(1) #state.view(-1, state.shape[-1])  # Shape: [2, 4]
-        next_state_red_graph = next_state_r.squeeze(1) # state_r.view(-1, state_r.shape[-1])  # Shape: [1, 4]
-
-
-        batch_next_actions = []
-        y = torch.cat([next_state_blue_graph, next_state_red_graph], dim=1)  # Shape: [3, 4]
-        print("CHECK 3")
-        
-        for item in torch.unbind(y, dim=0):
-            edge_index, edge_attr = build_edge_index(item, self.communication_range, self.observation_range, self.attack_range)
-
-            temp_act = []
-
-            for i, actor_i in enumerate(self.actors):
-                temp_act.append(actor_i(Data(x = item, edge_index = edge_index, edge_attr = edge_attr))[i])
-            
-        
-            batch_next_actions.append(torch.stack(temp_act))
-
-
-        # Current Value Estimates 
-        batch_critic_curr_actions = []
-        action_graph = action.squeeze(1) 
-        action_r_graph = action_r.squeeze(1)
-        actions_concat = torch.cat([action_graph, action_r_graph], dim=1).unsqueeze(-1)  # Shape: [3, 4]
-        x_2 = torch.cat([x, actions_concat], dim=-1) 
-
-        print("CHECK 4")
-        
-        for item in torch.unbind(x_2, dim=0):
-            edge_index, edge_attr = build_edge_index(item, self.communication_range, self.observation_range, self.attack_range)
-
-            temp_act = []
-
-            for j, actor_j in enumerate(self.critics):
-                temp_act.append(actor_j(Data(x = item, edge_index = edge_index, edge_attr = edge_attr))[j])
-            
-            batch_critic_curr_actions.append(torch.stack(temp_act))
-
-        batch_critic_curr_actions = torch.stack(batch_critic_curr_actions).squeeze(2)
-        print(batch_critic_curr_actions.shape)
-
-
-        batch_critic_next_actions = []
-        next_action_graph = torch.stack(batch_next_actions).squeeze(2) # torch.Size([2, 3, 1])
-        next_action_graph_r = next_action_r.squeeze(1)
-        next_actions_concat = torch.cat([next_action_graph, next_action_graph_r], dim=1).unsqueeze(-1)  # Shape: [3, 4]
-        y_2 = torch.cat([y, next_actions_concat], dim=-1) 
-
-
-        print("CHECK 5")
-        
-        for item in torch.unbind(y_2, dim=0):
-            edge_index, edge_attr = build_edge_index(item, self.communication_range, self.observation_range, self.attack_range)
-
-            temp_act = []
-
-            for i, actor_i in enumerate(self.critics):
-                temp_act.append(actor_i(Data(x = item, edge_index = edge_index, edge_attr = edge_attr))[i])
-            
-            batch_critic_next_actions.append(torch.stack(temp_act))
-
-
-        batch_critic_next_actions = torch.stack(batch_critic_next_actions).squeeze(2)
-        print(batch_critic_next_actions.shape)
-
-        print("CHECK 6")
-
-    # Compute target values for critics
-
-        target_value = rewards + (1 - done) * self.gamma * batch_critic_next_actions
-
-        print(batch_critic_curr_actions.shape)
-        print(target_value.shape)
-
-        # Compute critic loss
-        critic_loss = nn.MSELoss()(batch_critic_curr_actions, target_value)
-
-        # Update critics
-        for cri_optimizer_i in self.critic_optimizers:
-            cri_optimizer_i.zero_grad()
-        critic_loss.backward(retain_graph=True)
-        for cri_optimizer_i in self.critic_optimizers:
-            cri_optimizer_i.step()
-
-        print("CHECK 7")
-
-        batch_critic_curr_actions = []
-
-        for item in torch.unbind(x_2, dim=0):
-            edge_index, edge_attr = build_edge_index(item, self.communication_range, self.observation_range, self.attack_range)
-
-            temp_act = []
-
-            for j, actor_j in enumerate(self.critics):
-                temp_act.append(actor_j(Data(x = item, edge_index = edge_index, edge_attr = edge_attr))[j])
-            
-            batch_critic_curr_actions.append(torch.stack(temp_act))
-
-        batch_critic_curr_actions = torch.stack(batch_critic_curr_actions).squeeze(2)
-        print(batch_critic_curr_actions.shape)
-
-
-
-        # Compute actor loss using precomputed values
-        actor_loss = -batch_critic_curr_actions.mean()
-
-        # Update actors
-        for act_optimizer_i in self.actor_optimizers:
-            act_optimizer_i.zero_grad()
-        actor_loss.backward()
-        for act_optimizer_i in self.actor_optimizers:
-            act_optimizer_i.step()
-
-
-
-        # for i, (actor_i, critic_i, act_optimizer_i, cri_optimizer_i, reward) in enumerate(zip(self.actors, self.critics, self.actor_optimizers, self.critic_optimizers, rewards)):
-        #     # Critic
-
-        #                 # Next State Value Estimates
-        #     batch_critic_next_actions = []
-        #     next_action_graph = torch.stack(batch_next_actions).squeeze(2) # torch.Size([2, 3, 1])
-        #     next_action_graph_r = next_action_r.squeeze(1)
-        #     next_actions_concat = torch.cat([next_action_graph, next_action_graph_r], dim=1).unsqueeze(-1)  # Shape: [3, 4]
-        #     y_2 = torch.cat([y, next_actions_concat], dim=-1) 
-
-
-            
-        #     for item in torch.unbind(y_2, dim=0):
-        #         edge_index, edge_attr = build_edge_index(item, self.communication_range, self.observation_range, self.attack_range)
-
-        #         temp_act = []
-
-        #         for i, actor_i in enumerate(self.critics):
-        #             temp_act.append(actor_i(Data(x = item, edge_index = edge_index, edge_attr = edge_attr))[i])
-                
-        #         batch_critic_next_actions.append(torch.stack(temp_act))
-
-        #     batch_critic_next_actions = torch.stack(batch_critic_next_actions).squeeze(2)
-
-
-
-
-            
-        #     target_value = reward + (1 - done) * self.gamma * batch_critic_next_actions
-
-        #     # Compute critic loss (Mean Squared Error)
-        #     critic_loss = nn.MSELoss()(batch_critic_curr_actions, target_value)
-
-        #     # Update critic
-        #     cri_optimizer_i.zero_grad()
-        #     critic_loss.backward(retain_graph=True)
-        #     cri_optimizer_i.step()
-
-            
-        #     # Current Value Estimates 
-        #     batch_critic_curr_actions = []
-        #     action_graph = action.squeeze(1) 
-        #     action_r_graph = action_r.squeeze(1)
-        #     actions_concat = torch.cat([action_graph, action_r_graph], dim=1).unsqueeze(-1)  # Shape: [3, 4]
-        #     x_2 = torch.cat([x, actions_concat], dim=-1) 
-
-            
-        #     for item in torch.unbind(x_2, dim=0):
-        #         edge_index, edge_attr = build_edge_index(item, self.communication_range, self.observation_range, self.attack_range)
-
-        #         temp_act = []
-
-        #         for j, actor_j in enumerate(self.critics):
-        #             temp_act.append(actor_j(Data(x = item, edge_index = edge_index, edge_attr = edge_attr))[j])
-                
-        #         batch_critic_curr_actions.append(torch.stack(temp_act))
-
-        #     batch_critic_curr_actions = torch.stack(batch_critic_curr_actions).squeeze(2)
-
-
-
-        #     # Compute actor loss (negative of expected return)
-        #     actor_loss = - batch_critic_curr_actions.mean()
-            
-
-
-        #     # Update actor
-        #     act_optimizer_i.zero_grad()
-        #     actor_loss.backward(retain_graph=True)
-        #     act_optimizer_i.step()
-
-
-
-
 
 class DDPG:
     

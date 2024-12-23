@@ -8,6 +8,8 @@ class Config:
     do_visualize_traj = False  # when you visualize online, visualize trajectory will not work.
     do_visualize_traj_freq = 10
     root_path = 'results/temp'
+    comm_layer = True
+    team_reward_layer = True
 
     random_seed = 42
     num_env = 10  # 250
@@ -33,8 +35,8 @@ class Config:
     ent_coef = 0.01
     vf_coef = 0.5
     max_grad_norm = 10.
-    num_minibatch = 512 #40
-    replay_memory_capacity = 100000 # To do 
+    num_minibatch = 40 #512 #40
+    replay_memory_capacity = 100000  
     noise = 0.7
     tau = 0.001
 
@@ -48,7 +50,7 @@ class Config:
     ################# 3. Environment
     # General setting
     num_blue = 3
-    num_red = 2
+    num_red = 5
     island_position = [0, 0]
     island_radius = 1.2
     blue_velocity = 0.5144 / 100 * 5 * 5
