@@ -23,7 +23,7 @@ if __name__ == '__main__':
     # Parse arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--exp_name', type=str, default=f'Test_{random.randint(0, 1000)}')
-    parser.add_argument('--num_episode', type=int, default=100, help='Number of steps to evaluate')
+    parser.add_argument('--num_episode', type=int, default=5000, help='Number of steps to evaluate')
     parser.add_argument('--red_policy_mode', type=int, default=1, help='0: Aggressive Opponent / 1: Conservative Opponent')
     parser.add_argument('--model_path', type=str, default='results/base_744/model/model_6001.th')
     args = parser.parse_args()
