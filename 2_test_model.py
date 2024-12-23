@@ -64,7 +64,7 @@ if __name__ == '__main__':
 
     while True:
         with torch.no_grad():  # Make a decision
-            action_b = agent_blue.get_action(obs_b)
+            action_b, curr_graph = agent_blue.get_action(obs_b)
             action_r = agent_red.get_action(obs_r)
 
         step += 1
@@ -74,12 +74,15 @@ if __name__ == '__main__':
         next_state_b, next_state_r = next_obs_b
 
         # Check if episode has ended
-        episode_done, _, _, _ = done
+        episode_done, done_b, _, _ = done
 
         # Store transition and sample minibatch
 
+        next_graph = agent_blue.compute_next_graph(next_obs_b)
         next_action_r = agent_red.get_action(next_obs_r)
-        agent_blue.replay_memory.add_to_buffer(state_b, state_r, action_b, action_r, reward_b, next_state_b, next_state_r, next_action_r, episode_done)
+
+        agent_blue.replay_memory.add_to_buffer(
+            curr_graph, action_b, action_r, reward_b, next_graph, next_action_r, done_b)
 
 
 
@@ -90,7 +93,7 @@ if __name__ == '__main__':
             if step % 10 == 0:
                 agent_blue.update()
         elif mc == 4:
-            if step % 100 == 0:
+            if step % 10 == 0:
                 agent_blue.update()
 
         

@@ -2,8 +2,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim import Adam
-from torch_geometric.nn import GCNConv, MessagePassing
+from torch_geometric.nn import GCNConv, MessagePassing, global_mean_pool
 from torch_geometric.data import Data, Batch
+from torch_geometric.loader import DataLoader
 import time
 
 from env.utils.gnn_utils import build_edge_index
@@ -14,7 +15,6 @@ torch.autograd.set_detect_anomaly(True)
 
 class Node:
     def __init__(self, node_id, node_type, features):
-        print(features)
         type_dict = {"agent": 0, "adversarial": 1, "land": 2}
 
         self.node_id = node_id
@@ -89,19 +89,22 @@ class GNNModel(nn.Module):
         #self.conv2 = GCNConv(16, out_channels)  # Zweite Convolution-Schicht
 
     def forward(self, data):
-        x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+        print("Line 91")
+        print(data)
+    
 
-        print("OTHER FORWARD")
-        print(x)
-
-        
         # Erste Convolution
-        x = self.conv1(x, edge_index, edge_attr)
+        x = self.conv1(data)
+        print(x)
         x = torch.relu(x)  # Aktivierungsfunktion
         
         # Zweite Convolution
         #x = self.conv2(x, edge_index, edge_attr)
-        
+        x = global_mean_pool(x, data.batch) 
+        print(x)
+        breakpoint()
+
+
         return x
 
 
@@ -116,8 +119,9 @@ class GNNEmbeddingLayer(MessagePassing):
         self.observation_range = config.blue_detect_range
         self.attack_range = config.attack_range
 
-    def forward(self, x, edge_index, edge_attr):
+    def forward(self, data):
         # Knotenfeatures und Kantenfeatures weitergeben
+        x, edge_index, edge_attr = data
 
         out_edge = self.propagate(edge_index, x=x, edge_attr=edge_attr)
 
@@ -223,6 +227,25 @@ class MLP(nn.Module):
         x = self.fc3(x)  # Keine Aktivierungsfunktion am Ausgang, falls es sich um ein Regressionsproblem handelt
         return x
 
+class MLP_Q(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(MLP_Q, self).__init__()
+        self.fc1 = nn.Linear(in_channels + 1, 64)  # Erste Schicht
+        self.fc2 = nn.Linear(64, 64)  # Zweite Schicht
+        self.fc3 = nn.Linear(64, out_channels)  # Ausgabe-Schicht
+        self.relu = nn.ReLU()
+
+    def forward(self, x, y):
+        print(x.shape)
+        print(y.shape)
+        breakpoint()
+        x = torch.cat([x, y], dim=2) 
+        x = self.relu(self.fc1(x))
+        x = self.relu(self.fc2(x))
+        x = self.fc3(x)  # Keine Aktivierungsfunktion am Ausgang, falls es sich um ein Regressionsproblem handelt
+        return x
+
+
 
 class GNNWithMLP(nn.Module):
     def __init__(self, num_features, num_edge_features, out_channels_node, mlp_out_channels):
@@ -255,8 +278,8 @@ class ReplayMemory:
         self.memory_full = False
         self.num_minibatch = config.num_minibatch
 
-    def add_to_buffer(self, state, state_r, action, action_r, reward, next_state, next_state_r, next_action_r, done):
-        self.memory[self.pointer] = (state, state_r, action, action_r, reward, next_state, next_state_r, next_action_r, done)
+    def add_to_buffer(self, curr_graph, action_b, action_r, reward_b, next_obs_b, next_action_r, episode_done):
+        self.memory[self.pointer] = curr_graph, action_b, action_r, reward_b, next_obs_b, next_action_r, episode_done
         self.pointer = (self.pointer + 1) % self.capacity
 
         if not self.memory_full:
@@ -316,7 +339,7 @@ class MADDPG:
 
         self.actor_nn = MLP(in_channels=out_channels_node, out_channels=mlp_out_channels)
         self.critic_gnn = GNNModel(config, num_features + 2, out_channels_node)
-        self.critic_nn = MLP(in_channels=out_channels_node, out_channels=mlp_out_channels)
+        self.critic_nn = MLP_Q(in_channels=out_channels_node, out_channels=mlp_out_channels)
         self.actor_optimizer = Adam(list(self.actor_nn.parameters()), lr=config.lr_actor)
         self.critic_optimizer = Adam(list(self.critic_nn.parameters()), lr=config.lr_critic)
 
@@ -347,8 +370,22 @@ class MADDPG:
 
         actions = self.actor_nn(embedding[:self.num_blue]).T + noise 
 
-        return actions
+        return actions, data
     
+    def compute_next_graph(self, next_obs_b):
+        
+        # Get next graph
+        next_nodes = [Node(i, "agent", next_obs_b[0][0][i]) for i in range(len(next_obs_b[0][0]))]
+        next_nodes += [Node(i + self.num_blue, "adversarial", next_obs_b[1][0][i]) for i in range(len(next_obs_b[1][0]))]
+        next_nodes += [Node(self.num_blue + self.num_red, "land", self.island_position + [0,1])]
+
+        next_edge_index, next_edge_attr = initialize_edge_features(next_nodes)
+        next_node_tensors = torch.stack([node.to_tensor() for node in next_nodes])
+        next_data = Data(x=next_node_tensors, edge_index=next_edge_index, edge_attr=next_edge_attr)
+
+        return next_data
+
+
     def update(self):
         # Enough data stored to update
         if not self.replay_memory.memory_full:
@@ -356,9 +393,73 @@ class MADDPG:
                 return
             
         # Get sample
-        batch = self.replay_memory.sample()
-        state, state_r, action, action_r,  rewards, next_state, next_state_r, next_action_r, done = zip(*batch)
+        data_loader = self.replay_memory.sample()
 
+
+        for data in data_loader:
+            curr_graph, action_b, action_r, reward_b, next_graph, next_action_r, done = data
+
+         = zip(*batch)
+
+
+        curr_dl = DataLoader(curr_graph)
+        next_dl = DataLoader(next_graph)
+
+        print(reward_b)
+        print(reward_b[0].shape)
+        print(done)
+        print(done[0].shape)
+
+        done = torch.stack([t.int() for t in done], dim=0) #torch.Size([2, 1, 3])
+        reward_b = torch.stack(reward_b, dim=0)
+        print(done.shape)
+        print(reward_b.shape)
+
+
+        next_graph = Batch.from_data_list(next_graph)
+        curr_graph = Batch.from_data_list(curr_graph)
+
+        print(self.actor_gnn(next_graph))
+        print(self.actor_nn(self.actor_gnn(next_graph)).T)
+        print(self.critic_gnn(next_graph))
+        print(self.critic_nn(self.critic_gnn(next_graph), self.actor_nn(self.actor_gnn(next_graph)).T ))
+
+
+
+        target_value = reward_b + (1 - done) * self.gamma * self.critic_nn(self.critic_gnn(next_graph), self.actor_nn(self.actor_gnn(next_graph)).T )
+
+        print(target_value)
+        print(target_value.shape)
+        breakpoint()
+
+
+        critic_loss = nn.MSELoss()(self.critic_nn(self.critic_gnn(curr_graph), action_b), target_value)
+
+        print(critic_loss)
+
+        self.critic_optimizer.zero_grad()
+        critic_loss.backward()
+        self.critic_optimizer.step()
+
+        actor_loss = -self.critic_nn(self.critic_gnn(curr_graph),  self.actor_nn(self.actor_gnn(curr_graph)).T).mean()
+        # critic_i(state, state_r, curr_actions_tensor).mean()
+# #        curr_actions = []
+#         for actor_i in self.actors:
+#             next_actions.append(actor_i(next_state, next_state_r))
+#             curr_actions.append(actor_i(state, state_r))
+
+
+#         next_actions_tensor = torch.stack(next_actions, dim=-1)  # Shape will be [40, 1, 5]
+#         curr_actions_tensor = torch.stack(curr_actions, dim=-1)
+
+
+        self.actor_optimizer.zero_grad()
+        actor_loss.backward()
+        self.actor_optimizer.step()
+
+
+        return 
+    
         # Unpack data
         state = torch.stack(state)
         state_r = torch.stack(state_r)
@@ -403,10 +504,6 @@ class MADDPG:
             
         
             batch_next_actions.append(torch.stack(temp_act))
-
-
-
-
 
 
         # Current Value Estimates 
