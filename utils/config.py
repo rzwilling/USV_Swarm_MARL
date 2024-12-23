@@ -48,7 +48,7 @@ class Config:
     ################# 3. Environment
     # General setting
     num_blue = 3
-    num_red = 1
+    num_red = 2
     island_position = [1, 0]
     island_radius = 1.2
     blue_velocity = 0.5144 / 100 * 5 * 5

@@ -266,7 +266,7 @@ class USVEnv():
         r_win = 50. * blue_win.reshape(-1, 1)
         r_lose = -50. * red_win.reshape(-1, 1)
 
-        return (r_atk + r_catch + r_dead + r_win + r_lose + 0.2) / 20.
+        return (r_atk + r_catch + r_dead + r_win + r_lose + 1) / 20.
 
     def get_reward_red(self):
         return None

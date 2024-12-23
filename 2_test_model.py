@@ -86,7 +86,7 @@ if __name__ == '__main__':
             if step % 10 == 0:
                 agent_blue.update()
         elif mc == 4:
-            if step % 10 == 0:
+            if step % 100 == 0:
                 agent_blue.update()
 
         
