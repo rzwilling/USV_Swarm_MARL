@@ -60,9 +60,9 @@ class MessageUpdateFunction(nn.Module):
     def __init__(self, in_channels, in_channels_edge, out_channels):
         super(MessageUpdateFunction, self).__init__()
         self.mlp = torch.nn.Sequential(
-            torch.nn.Linear(in_channels * 2 + in_channels_edge, 64),  # Input size is the sum of features from vi, vj, and eji
+            torch.nn.Linear(in_channels * 2 + in_channels_edge, 32),  # Input size is the sum of features from vi, vj, and eji
             torch.nn.ReLU(),
-            torch.nn.Linear(64, out_channels)  # Output size is the node feature dimension
+            torch.nn.Linear(32, out_channels)  # Output size is the node feature dimension
         )
     def forward(self, v_i, v_j, e_ij):
         # Kombiniere Knotenmerkmale und Kantenmerkmale
@@ -73,9 +73,9 @@ class MessageUpdateFunction2(nn.Module):
     def __init__(self, in_channels, in_channels_edge, out_channels):
         super(MessageUpdateFunction2, self).__init__()
         self.mlp = torch.nn.Sequential(
-            torch.nn.Linear(in_channels * 2 + in_channels_edge, 64),  # Input size is the sum of features from vi, vj, and eji
+            torch.nn.Linear(in_channels * 2 + in_channels_edge, 32),  # Input size is the sum of features from vi, vj, and eji
             torch.nn.ReLU(),
-            torch.nn.Linear(64, out_channels)  # Output size is the node feature dimension
+            torch.nn.Linear(32, out_channels)  # Output size is the node feature dimension
         )
     def forward(self, v_i, v_j, e_ij):
         # Kombiniere Knotenmerkmale und Kantenmerkmale
@@ -281,7 +281,7 @@ class ReplayMemory:
 
 class MADDPG:
    
-    def __init__(self, config, obs_b, obs_r):
+    def __init__(self, config):
         self.num_env = config.num_env
         self.num_blue = config.num_blue
         self.num_red = config.num_red

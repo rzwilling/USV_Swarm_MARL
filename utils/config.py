@@ -4,6 +4,8 @@ import numpy as np
 
 class Config:
 
+    exp_big_name = "old_w_communication"
+
     do_visualize_online = False
     do_visualize_traj = False  # when you visualize online, visualize trajectory will not work.
     do_visualize_traj_freq = 10
@@ -35,7 +37,7 @@ class Config:
     ent_coef = 0.01
     vf_coef = 0.5
     max_grad_norm = 10.
-    num_minibatch = 40 #512 #40
+    num_minibatch = 128 #512 #40
     replay_memory_capacity = 100000  
     noise = 0.7
     tau = 0.001

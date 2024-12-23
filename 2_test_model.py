@@ -8,27 +8,13 @@ import random
 from env.USVEnv import USVEnv
 from utils.logger import Logger
 from utils.config import Config
+from utils.load_model import load_config, load_model, save_config, save_model 
 from env.heuristic.policy_red import PigeonRed
 from env.heuristic.policy_blue import DDPG, MADDPG, HeuristicBluePolicy, SimpleActorCritic
 import torch
 
 
 
-def save_maddpg_model(model, file_path):
-    # Save the state dictionaries of the models (actors and critics) and optimizers
-    state_dict = {
-        'actor_gnn': model.actor_gnn.state_dict(),
-        'actor_nn': model.actor_nn.state_dict(),
-        'critic_gnn': model.critic_gnn.state_dict(),
-        'critic_nn': model.critic_nn.state_dict(),
-        'actor_optimizer': model.actor_optimizer.state_dict(),
-        'critic_optimizer': model.critic_optimizer.state_dict(),
-        'config': model.__dict__,  # Optionally save the config if needed
-    }
-    
-    # Save the complete state
-    torch.save(state_dict, file_path)
-    print(f"Model saved to {file_path}")
 
 
 
@@ -71,7 +57,7 @@ if __name__ == '__main__':
     elif mc == 3:
         agent_blue = DDPG(config)
     elif mc == 4:
-        agent_blue = MADDPG(config, obs_b, obs_r)
+        agent_blue = MADDPG(config)
 
 
 
@@ -82,6 +68,8 @@ if __name__ == '__main__':
     cnt = 0
     step = 0
 
+    save_config(config, f'./saved_models/{config.exp_big_name}_{config.exp_name}_config.json') 
+ 
     while True:
         with torch.no_grad():  # Make a decision
             action_b, curr_graph = agent_blue.get_action(obs_b)
@@ -113,9 +101,12 @@ if __name__ == '__main__':
             if step % 10 == 0:
                 agent_blue.update()
         elif mc == 4:
-            if step % 10 == 0:
+            if step % 40 == 0:
                 agent_blue.update()
 
+        if step + 1 % 50000 == 0: # 1000
+            save_model(agent_blue, f'./saved_models/{config.exp_big_name}_{config.exp_name}_model_{step}.pth')
+            #load_model(agent_blue, f'maddpg_model_{step}.pth')
         
         # Assign next state
         obs_b = next_obs_b  
@@ -130,6 +121,9 @@ if __name__ == '__main__':
         if args.num_episode == cnt:
                 break
     
+
+
+    save_model(agent_blue, f'./saved_models/{config.exp_big_name}_{config.exp_name}_model_final.pth')
 
 
     # Calculate and log final evaluation results

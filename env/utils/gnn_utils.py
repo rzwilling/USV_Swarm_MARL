@@ -98,15 +98,3 @@ def build_edge_index(positions, communication_range, observation_range, attack_r
 
     return edge_index, edge_attr
 
-# Beispielnutzung:
-positions = torch.tensor([[0, 0], [1, 1], [2, 0], [3, 3]], dtype=torch.float)  # Positionen der Knoten
-communication_range = 2.0
-observation_range = 2.0
-attack_range = 1.5
-
-edge_index, edge_attr = build_edge_index(positions, communication_range, observation_range, attack_range)
-
-print("Edge Index:")
-print(edge_index)
-print("Edge Features:")
-print(edge_attr)
