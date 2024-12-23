@@ -33,7 +33,7 @@ class Config:
     ent_coef = 0.01
     vf_coef = 0.5
     max_grad_norm = 10.
-    num_minibatch = 2 #512 #40
+    num_minibatch = 512 #40
     replay_memory_capacity = 100000 # To do 
     noise = 0.7
     tau = 0.001

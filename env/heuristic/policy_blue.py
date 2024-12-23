@@ -282,7 +282,7 @@ class MADDPG:
         for _ in range(config.num_blue):
             self.actors.append(GNNWithMLP(num_features=num_features, num_edge_features=num_edge_features, 
                   out_channels_node=out_channels_node, mlp_out_channels=mlp_out_channels))
-            self.critics.append(GNNWithMLP(num_features=num_features, num_edge_features=num_edge_features, 
+            self.critics.append(GNNWithMLP(num_features=num_features +1, num_edge_features=num_edge_features, 
                   out_channels_node=out_channels_node, mlp_out_channels=mlp_out_channels))  
             self.actor_optimizers.append(Adam(list(self.actors[-1].parameters()), lr=config.lr_actor))
             self.critic_optimizers.append(Adam(list(self.critics[-1].parameters()), lr=config.lr_critic))
@@ -316,16 +316,17 @@ class MADDPG:
 
         return concatenated_tensor
     
-
     def update(self):
+        # Enough data stored to update
         if not self.replay_memory.memory_full:
             if self.replay_memory.pointer < self.replay_memory.num_minibatch:
                 return
-
+            
+        # Get sample
         batch = self.replay_memory.sample()
         state, state_r, action, action_r,  rewards, next_state, next_state_r, next_action_r, done = zip(*batch)
 
-
+        # Unpack data
         state = torch.stack(state)
         state_r = torch.stack(state_r)
         action = torch.stack(action)
@@ -337,121 +338,148 @@ class MADDPG:
 
         next_state = torch.stack(next_state)
         next_state_r = torch.stack(next_state_r)
+        state_blue_graph = state.squeeze(1)
+        state_red_graph = state_r.squeeze(1)
+
         done = torch.tensor([d[0] for d in done], dtype=torch.float)
         done = done.unsqueeze(1) 
 
 
-        state_blue_graph = state.squeeze(1) #state.view(-1, state.shape[-1])  # Shape: [2, 4]
-        state_red_graph = state_r.squeeze(1) # state_r.view(-1, state_r.shape[-1])  # Shape: [1, 4]
+        # Actions for current states
+        batch_curr_actions = []
+        x = torch.cat([state_blue_graph, state_red_graph], dim=1)
 
-        x = torch.cat([state_blue_graph, state_red_graph], dim=1)  # Shape: [3, 4]
-
-        data_list = []
-
-        # Process each item and unpack the returned values into separate lists
         for item in torch.unbind(x, dim=0):
             edge_index, edge_attr = build_edge_index(item, self.communication_range, self.observation_range, self.attack_range)
-            data_list.append(Data(x=item, edge_index=edge_index, edge_attr=edge_attr))
+
+            temp_act = []
+
+            for i, actor_i in enumerate(self.actors):
+                temp_act.append(actor_i(Data(x = item, edge_index = edge_index, edge_attr = edge_attr))[i])
             
+        
+            batch_curr_actions.append(torch.stack(temp_act))
 
-        for entry in data_list:
-
+        # Actuibs fir next states
 
         next_state_blue_graph = next_state.squeeze(1) #state.view(-1, state.shape[-1])  # Shape: [2, 4]
         next_state_red_graph = next_state_r.squeeze(1) # state_r.view(-1, state_r.shape[-1])  # Shape: [1, 4]
 
+
+        batch_next_actions = []
         y = torch.cat([next_state_blue_graph, next_state_red_graph], dim=1)  # Shape: [3, 4]
-        next_data_list = []
-
-
         for item in torch.unbind(y, dim=0):
             edge_index, edge_attr = build_edge_index(item, self.communication_range, self.observation_range, self.attack_range)
-            next_data_list.append(Data(x=item, edge_index=edge_index, edge_attr=edge_attr))
-            
-        batch_next = Batch.from_data_list(next_data_list)
 
+            temp_act = []
+
+            for i, actor_i in enumerate(self.actors):
+                temp_act.append(actor_i(Data(x = item, edge_index = edge_index, edge_attr = edge_attr))[i])
+            
+        
+            batch_next_actions.append(torch.stack(temp_act))
+
+
+
+
+
+
+        # Current Value Estimates 
+        batch_critic_curr_actions = []
         action_graph = action.squeeze(1) 
         action_r_graph = action_r.squeeze(1)
-
-
-
-
         actions_concat = torch.cat([action_graph, action_r_graph], dim=1).unsqueeze(-1)  # Shape: [3, 4]
-
         x_2 = torch.cat([x, actions_concat], dim=-1) 
-        data_list_critic = []
+
+        
         for item in torch.unbind(x_2, dim=0):
             edge_index, edge_attr = build_edge_index(item, self.communication_range, self.observation_range, self.attack_range)
-            data_list_critic.append(Data(x=item, edge_index=edge_index, edge_attr=edge_attr))
+
+            temp_act = []
+
+            for j, actor_j in enumerate(self.critics):
+                temp_act.append(actor_j(Data(x = item, edge_index = edge_index, edge_attr = edge_attr))[j])
             
-        
-        batch_curr_critic = Batch.from_data_list(data_list_critic)
+            batch_critic_curr_actions.append(torch.stack(temp_act))
+
+        batch_critic_curr_actions = torch.stack(batch_critic_curr_actions).squeeze(2)
 
 
-
-        next_actions = []
-        curr_actions = []
-
-
-        for i, actor_i in enumerate(self.actors):
-
-            curr_actions.append(actor_i(batch_curr)[:,i])
-            next_actions.append(actor_i(batch_next)[:,i])
-
-
-
-        next_actions = torch.stack(next_actions)  # Shape will be [40, 1, 5]
-
-        #next_actions_tensor = torch.stack(next_actions, dim=-1)  # Shape will be [40, 1, 5]
-        curr_actions_tensor = torch.stack(curr_actions, dim=-1)  # Shape will be [40, 1, 5]
-
-
-        next_action_r_graph = next_action_r.squeeze(1)
-
-        next_actions_concat =  torch.cat([next_actions, next_action_r_graph], dim=1).unsqueeze(-1) 
-
-        y_2 = torch.cat([y, next_actions_concat], dim=-1) 
-        next_data_list_critic = []
-        
-        for item in torch.unbind(y_2, dim=0):
-            edge_index, edge_attr = build_edge_index(item, self.communication_range, self.observation_range, self.attack_range)
-            next_data_list_critic.append(Data(x=item, edge_index=edge_index, edge_attr=edge_attr))
-            
-        
-        batch_next_critic = Batch.from_data_list(next_data_list_critic)
-
-
-        
 
         for i, (actor_i, critic_i, act_optimizer_i, cri_optimizer_i, reward) in enumerate(zip(self.actors, self.critics, self.actor_optimizers, self.critic_optimizers, rewards)):
+            # Critic
 
-            state_value = critic_i(batch_curr_critic)
-            next_state_value = critic_i(batch_next_critic)
+                        # Next State Value Estimates
+            batch_critic_next_actions = []
+            next_action_graph = torch.stack(batch_next_actions).squeeze(2) # torch.Size([2, 3, 1])
+            next_action_graph_r = next_action_r.squeeze(1)
+            next_actions_concat = torch.cat([next_action_graph, next_action_graph_r], dim=1).unsqueeze(-1)  # Shape: [3, 4]
+            y_2 = torch.cat([y, next_actions_concat], dim=-1) 
 
-            target_value = reward + (1 - done) * self.gamma * next_state_value
+
+            
+            for item in torch.unbind(y_2, dim=0):
+                edge_index, edge_attr = build_edge_index(item, self.communication_range, self.observation_range, self.attack_range)
+
+                temp_act = []
+
+                for i, actor_i in enumerate(self.critics):
+                    temp_act.append(actor_i(Data(x = item, edge_index = edge_index, edge_attr = edge_attr))[i])
+                
+                batch_critic_next_actions.append(torch.stack(temp_act))
+
+            batch_critic_next_actions = torch.stack(batch_critic_next_actions).squeeze(2)
+
+
+
+
+            
+            target_value = reward + (1 - done) * self.gamma * batch_critic_next_actions
 
             # Compute critic loss (Mean Squared Error)
-            critic_loss = nn.MSELoss()(state_value, target_value)
+            critic_loss = nn.MSELoss()(batch_critic_curr_actions, target_value)
 
             # Update critic
             cri_optimizer_i.zero_grad()
             critic_loss.backward(retain_graph=True)
             cri_optimizer_i.step()
 
+            
+            # Current Value Estimates 
+            batch_critic_curr_actions = []
+            action_graph = action.squeeze(1) 
+            action_r_graph = action_r.squeeze(1)
+            actions_concat = torch.cat([action_graph, action_r_graph], dim=1).unsqueeze(-1)  # Shape: [3, 4]
+            x_2 = torch.cat([x, actions_concat], dim=-1) 
+
+            
+            for item in torch.unbind(x_2, dim=0):
+                edge_index, edge_attr = build_edge_index(item, self.communication_range, self.observation_range, self.attack_range)
+
+                temp_act = []
+
+                for j, actor_j in enumerate(self.critics):
+                    temp_act.append(actor_j(Data(x = item, edge_index = edge_index, edge_attr = edge_attr))[j])
+                
+                batch_critic_curr_actions.append(torch.stack(temp_act))
+
+            batch_critic_curr_actions = torch.stack(batch_critic_curr_actions).squeeze(2)
+
+
+
             # Compute actor loss (negative of expected return)
-            actor_loss = -critic_i(state, state_r, curr_actions_tensor).mean()
+            actor_loss = - batch_critic_curr_actions.mean()
+            
+
 
             # Update actor
             act_optimizer_i.zero_grad()
             actor_loss.backward(retain_graph=True)
             act_optimizer_i.step()
 
-            next_actions[i] = actor_i(batch_next)
-            curr_actions[i] = actor_i(batch_curr)
 
 
 
-        return        
 
 
 
