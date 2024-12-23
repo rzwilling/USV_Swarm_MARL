@@ -4,7 +4,7 @@ import numpy as np
 
 class Config:
 
-    do_visualize_online = False
+    do_visualize_online = True
     do_visualize_traj = False  # when you visualize online, visualize trajectory will not work.
     do_visualize_traj_freq = 10
     root_path = 'results/temp'
@@ -49,7 +49,7 @@ class Config:
     # General setting
     num_blue = 3
     num_red = 2
-    island_position = [1, 0]
+    island_position = [0, 0]
     island_radius = 1.2
     blue_velocity = 0.5144 / 100 * 5 * 5
     red_velocity = 0.5144 / 100 * 7 * 5
@@ -64,6 +64,7 @@ class Config:
     attack_range = 1.5
     attack_angle = 3 * 45 / 180 * np.pi
     blue_detect_range = 15.0
+    communication_range = 20.0
     end_condition_red_touch = 1
     red_k1 = 1
     

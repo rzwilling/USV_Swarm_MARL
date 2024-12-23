@@ -10,80 +10,186 @@ from env.utils.gnn_utils import build_edge_index
 torch.autograd.set_detect_anomaly(True)
 
 
-class ActorNetwork(nn.Module):
-    def __init__(self, state_dim):
-        super(ActorNetwork, self).__init__()
-        self.fc1 = nn.Linear(state_dim * 4 , 64)
-        self.fc2 = nn.Linear(64, 64)
-        self.fc3 = nn.Linear(64, 1)
+
+
+class Node:
+    def __init__(self, node_id, node_type, features):
+        print(features)
+        type_dict = {"agent": 0, "adversarial": 1, "land": 2}
+
+        self.node_id = node_id
+        self.node_type = type_dict[node_type]  # 'agent', 'adversarial', 'land'
+        self.x = features[0]          # Only for agent nodes
+        self.y = features[1]          # Only for agent nodes
+        self.yaw = features[2]
+        self.alive = features[3]
+
+    def to_tensor(self):
+        # Return a tensor of node features (x, y, yaw, alive)
+        return torch.tensor([self.node_type, self.x, self.y, self.yaw, self.alive], dtype=torch.float)
+
+
+def initialize_edge_features(nodes):
+
+    edge_index = []
+    edge_attr = []
     
-    def forward(self, state_b, state_r):
-        if state_b.dim() == 3:
-            state_b = state_b.unsqueeze(0)
-        if state_r.dim() == 3:
-            state_r = state_r.unsqueeze(0)
+    # Loop through all pairs of nodes to create edges
+    for i, node_i in enumerate(nodes):
+        for j, node_j in enumerate(nodes):
+            if i != j:
+                # Compute distance, bearing, and relative orientation between node_i and node_j
+                distance = np.linalg.norm(np.array([node_i.x, node_i.y]) - np.array([node_j.x, node_j.y]))
+                bearing = np.arctan2(node_j.y - node_i.y, node_j.x - node_i.x) - node_i.yaw
+                relative_orientation =np.arctan2(node_i.y - node_j.y, node_i.x - node_j.x) - node_j.yaw
+                
+                edge_feature = torch.tensor([distance, bearing, relative_orientation], dtype=torch.float)
 
-        state = torch.cat([state_b, state_r], dim=2) 
-        state = torch.flatten(state, start_dim=2)
-        x = torch.relu(self.fc1(state))
-        x = torch.relu(self.fc2(x))
-        action_value = self.fc3(x).squeeze(-1)
-        return action_value
+                edge_index.append([node_i.node_id, node_j.node_id])
+                edge_attr.append(edge_feature)
 
-class CriticNetwork(nn.Module):
-    def __init__(self, state_dim, num_blue):
-        super(CriticNetwork, self).__init__()
-        self.fc1 = nn.Linear(state_dim * 4 + num_blue, 64)
-        self.fc2 = nn.Linear(64, 64)
-        self.fc3 = nn.Linear(64, 1)
+      # Convert to PyTorch tensors
+    edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()  # Transpose to match PyTorch Geometric format
+    edge_attr = torch.stack(edge_attr, dim=0)  # Stack the edge features into a tensor
+                  
     
-    def forward(self, state_b, state_r, action):
-        if state_b.dim() == 3:
-            state_b = state_b.unsqueeze(0)
-        if state_r.dim() == 3:
-            state_r = state_r.unsqueeze(0)
-        if action.dim() == 1:
-            action = action.unsqueeze(0)
-        if action.dim() == 2:
-            action = action.unsqueeze(-1)
-
-        state = torch.cat([state_b, state_r], dim=2) 
-        state = torch.flatten(state, start_dim=2) 
-        x = torch.cat([state, action], dim=-1) 
-        x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fc2(x))
-        state_value = self.fc3(x).squeeze(-1)
-        return state_value
+    return edge_index, edge_attr
 
 
 class MessageUpdateFunction(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, in_channels_edge, out_channels):
         super(MessageUpdateFunction, self).__init__()
-        self.fc = nn.Linear(in_channels, out_channels)
-
-    def forward(self, node_features, edge_features):
+        self.mlp = torch.nn.Sequential(
+            torch.nn.Linear(in_channels * 2 + in_channels_edge, 64),  # Input size is the sum of features from vi, vj, and eji
+            torch.nn.ReLU(),
+            torch.nn.Linear(64, out_channels)  # Output size is the node feature dimension
+        )
+    def forward(self, v_i, v_j, e_ij):
         # Kombiniere Knotenmerkmale und Kantenmerkmale
-        combined = torch.cat([node_features, edge_features], dim=-1)
-        return self.fc(combined)
+        combined = torch.cat([v_i, v_j, e_ij], dim=-1)
+        return self.mlp(combined)
 
 # Knoten-Update-Funktion für das Zustands-Embedding
 class NodeUpdateFunction(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(NodeUpdateFunction, self).__init__()
-        self.fc = nn.Linear(in_channels, out_channels)
+        self.fc = nn.Linear(in_channels + out_channels, out_channels)
 
-    def forward(self, node_features, aggregated_messages):
+    def forward(self, v_i, aggregated_messages):
         # Kombiniere Knotenmerkmale und aggregierte Nachrichten
-        combined = torch.cat([node_features, aggregated_messages], dim=-1)
+        combined = torch.cat([v_i, aggregated_messages], dim=-1)
         return self.fc(combined)
 
-# GNN Layer für die Kantenaktualisierung und Knotenaktualisierung
-class GNNLayer(MessagePassing):
-    def __init__(self, in_channels_node, in_channels_edge, out_channels_node):
-        super(GNNLayer, self).__init__(aggr='mean')  # Mittelwertaggregation für die Nachrichten
 
-        self.message_function = MessageUpdateFunction(in_channels_node + in_channels_edge, out_channels_node)
-        self.node_update_function = NodeUpdateFunction(in_channels_node + out_channels_node, out_channels_node)
+
+class GNNModel(nn.Module):
+    def __init__(self, config, in_channels, out_channels):
+        super(GNNModel, self).__init__()
+        self.conv1 = GNNEmbeddingLayer(config, in_channels, 3, out_channels)  # Erste Convolution-Schicht
+        #self.conv2 = GCNConv(16, out_channels)  # Zweite Convolution-Schicht
+
+    def forward(self, data):
+        x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+
+        print("OTHER FORWARD")
+        print(x)
+
+        
+        # Erste Convolution
+        x = self.conv1(x, edge_index, edge_attr)
+        x = torch.relu(x)  # Aktivierungsfunktion
+        
+        # Zweite Convolution
+        #x = self.conv2(x, edge_index, edge_attr)
+        
+        return x
+
+
+
+# GNN Layer für die Kantenaktualisierung und Knotenaktualisierung
+class GNNEmbeddingLayer(MessagePassing):
+    def __init__(self, config, in_channels_node, in_channels_edge, out_channels_node):
+        super(GNNEmbeddingLayer, self).__init__(aggr='sum') 
+
+        self.message_function = MessageUpdateFunction(in_channels_node, in_channels_edge, out_channels_node)
+        #self.node_update_function = NodeUpdateFunction(in_channels_node, out_channels_node)
+        self.observation_range = config.blue_detect_range
+        self.attack_range = config.attack_range
+
+    def forward(self, x, edge_index, edge_attr):
+        # Knotenfeatures und Kantenfeatures weitergeben
+
+        out_edge = self.propagate(edge_index, x=x, edge_attr=edge_attr)
+
+        return out_edge
+
+    def message(self, x_j, x_i, edge_attr):
+        # Nachrichten von den Nachbarknoten (edge_attr sind die Kantenfeatures)
+        #distance, bearing, relative_orientation = edge_attr
+       
+
+        message = self.message_function(x_i, x_j, edge_attr)
+
+        distance = edge_attr[:, 0]
+        node_type = x_j[:, 0]
+        mask = torch.ones_like(distance, dtype=torch.bool) 
+
+        mask[node_type == 0] = distance[node_type == 0] < self.observation_range
+        mask[node_type == 1] = distance[node_type == 1] < self.attack_range
+
+        return mask.view(-1, 1) * message # self.message_function(x_j, edge_attr)
+
+    # def update(self, aggr_out, x):
+    #     # Aggregierte Nachrichten und Knotenmerkmale kombinieren und aktualisieren
+    #     return self.node_update_function(x, aggr_out)
+    
+
+
+
+    
+    # def aggregate_messages_by_range(self, node_i, edge_index, edge_attr):
+    #     """
+    #     This function aggregates messages based on the relationship type (observation, attack, land).
+        
+    #     :param node_i: The current node for which we are aggregating messages.
+    #     :param edge_index: The edge index (connections between nodes).
+    #     :param edge_attr: The edge features (can include relationship type).
+    #     :param relationship_type: The type of relationship to aggregate (observation, attack, or land).
+    #     :return: Aggregated messages from the neighbors in the specified range.
+    #     """
+    #     # Filter the edges by the relationship type (observation, attack, land)
+    #     filtered_edges = edge_attr[edge_index[0] == node_i]
+
+    #     # For each relationship type, aggregate the incoming messages
+    #     aggregated_messages = {
+    #         "observation": [],
+    #         "attack": [],
+    #         "land": []
+    #     }
+
+    #     # Example: Filter based on the relationship type and aggregate accordingly
+    #     for idx, edge in enumerate(filtered_edges):
+    #         # Assuming the edge_attr contains the relationship type
+    #         if edge["relationship_type"] == "observation":
+    #             aggregated_messages["observation"].append(edge)
+    #         elif edge["relationship_type"] == "attack":
+    #             aggregated_messages["attack"].append(edge)
+    #         elif edge["relationship_type"] == "land":
+    #             aggregated_messages["land"].append(edge)
+
+    #     # Return aggregated messages for each type (observation, attack, land)
+    #     return aggregated_messages
+
+#GNN Layer für die Kantenaktualisierung und Knotenaktualisierung
+class GNNCommunicationLayer(MessagePassing):
+    def __init__(self, config, in_channels_node, in_channels_edge, out_channels_node):
+        super(GNNCommunicationLayer, self).__init__(aggr='sum') 
+
+        self.message_function = MessageUpdateFunction(in_channels_node, in_channels_edge, out_channels_node)
+        #self.node_update_function = NodeUpdateFunction(in_channels_node, out_channels_node)
+        self.observation_range = config.blue_detect_range
+        self.attack_range = config.attack_range
+        self.communication_range = config.communication_range
 
     def forward(self, x, edge_index, edge_attr):
         # Knotenfeatures und Kantenfeatures weitergeben
@@ -93,11 +199,15 @@ class GNNLayer(MessagePassing):
 
     def message(self, x_j, edge_attr):
         # Nachrichten von den Nachbarknoten (edge_attr sind die Kantenfeatures)
-        return self.message_function(x_j, edge_attr)
+        distance, bearing, relative_orientation, node_type = edge_attr
 
-    def update(self, aggr_out, x):
-        # Aggregierte Nachrichten und Knotenmerkmale kombinieren und aktualisieren
-        return self.node_update_function(x, aggr_out)
+        if node_type == 'agent':
+            mask = distance < self.communication_range
+        else:
+            mask = False            
+
+        return mask.view(-1, 1) * x_j # self.message_function(x_j, edge_attr)
+
 
 class MLP(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -136,85 +246,6 @@ class GNNWithMLP(nn.Module):
         
         return output
     
-class GNNWithMLPCritic(nn.Module):
-    def __init__(self, num_features, num_edge_features, out_channels_node, mlp_out_channels):
-        super(GNNWithMLP, self).__init__()
-        # Initialisiere GNN Layer
-        self.gnn_layer = GNNLayer(in_channels_node=num_features, in_channels_edge=num_edge_features, out_channels_node=out_channels_node)
-        
-        # Initialisiere das MLP, das die Ausgabe des GNN verarbeitet
-        self.mlp = MLP(in_channels=out_channels_node, out_channels=mlp_out_channels)
-
-    def forward(self, x, edge_index, edge_attr):
-        # Berechne die Ausgabe des GNN
-        gnn_output = self.gnn_layer(x, edge_index, edge_attr)
-        
-        # Wende das MLP auf die GNN-Ausgabe an
-        output = self.mlp(gnn_output)
-        
-        return output
-
-class GNNActor(nn.Module):
-    def __init__(self, feat_per_node, action_dim, hidden_dim = 64):
-        super(GNNActor, self).__init__()
-        # GNN 
-        self.conv1 = GCNConv(feat_per_node, hidden_dim)
-        self.conv2 = GCNConv(hidden_dim, hidden_dim)
-
-        # MLP 
-        self.fc1 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, action_dim)
-    
-    def forward(self, data):
-        # if state_b.dim() == 3:
-        #     state_b = state_b.unsqueeze(0)
-        # if state_r.dim() == 3:
-        #     state_r = state_r.unsqueeze(0)
-
-        # state = torch.cat([state_b, state_r], dim=2) 
-        # state = torch.flatten(state, start_dim=2)
-
-        x, edge_index = data.x, data.edge_index
-        x = torch.relu(self.conv1(x, edge_index))
-        x = torch.relu(self.conv2(x, edge_index))
-        x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fc2(x))
-        action_value = self.fc3(x).squeeze(-1)
-
-        return action_value
-
-
-class GNNCritic(nn.Module):
-    def __init__(self, feat_per_node, action_dim, hidden_dim = 64):
-        super(GNNActor, self).__init__()
-        # GNN 
-        self.conv1 = GCNConv(feat_per_node, hidden_dim)
-        self.conv2 = GCNConv(hidden_dim, hidden_dim)
-
-        # MLP 
-        self.fc1 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, action_dim)
-    
-    def forward(self, data):
-        # if state_b.dim() == 3:
-        #     state_b = state_b.unsqueeze(0)
-        # if state_r.dim() == 3:
-        #     state_r = state_r.unsqueeze(0)
-
-        # state = torch.cat([state_b, state_r], dim=2) 
-        # state = torch.flatten(state, start_dim=2)
-
-        x, edge_index = data.x, data.edge_index
-        x = torch.relu(self.conv1(x, edge_index))
-        x = torch.relu(self.conv2(x, edge_index))
-        x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fc2(x))
-        action_value = self.fc3(x).squeeze(-1)
-
-        return action_value
-
 
 class ReplayMemory:
     def __init__(self, config):
@@ -245,7 +276,7 @@ class ReplayMemory:
 
 class MADDPG:
    
-    def __init__(self, config, agent_red):
+    def __init__(self, config, obs_b, obs_r):
         self.num_env = config.num_env
         self.num_blue = config.num_blue
         self.num_red = config.num_red
@@ -254,7 +285,6 @@ class MADDPG:
         self.gamma = config.gamma 
         self.noise = config.noise
         self.tau = config.tau
-        self.agent_red = agent_red
 
         state_dim = config.num_blue + config.num_red
         action_dim = 1 #config.action_dim
@@ -262,6 +292,7 @@ class MADDPG:
         self.communication_range = 15 
         self.observation_range = config.blue_detect_range
         self.attack_range = config.attack_range
+        self.island_position = config.island_position
 
 
         num_features = 4
@@ -269,52 +300,54 @@ class MADDPG:
         out_channels_node = 16
         mlp_out_channels = 1
 
-        # self.actor = GNNWithMLP(num_features=num_features, num_edge_features=num_edge_features, 
-        #           out_channels_node=out_channels_node, mlp_out_channels=mlp_out_channels)
 
-        #output = model(x, edge_index, edge_attr)
+        self.actor_gnn = GNNModel(config, num_features + 1, out_channels_node)
 
 
-        self.actors = []
-        self.critics = []
-        self.actor_optimizers = []
-        self.critic_optimizers = []
-        for _ in range(config.num_blue):
-            self.actors.append(GNNWithMLP(num_features=num_features, num_edge_features=num_edge_features, 
-                  out_channels_node=out_channels_node, mlp_out_channels=mlp_out_channels))
-            self.critics.append(GNNWithMLP(num_features=num_features +1, num_edge_features=num_edge_features, 
-                  out_channels_node=out_channels_node, mlp_out_channels=mlp_out_channels))  
-            self.actor_optimizers.append(Adam(list(self.actors[-1].parameters()), lr=config.lr_actor))
-            self.critic_optimizers.append(Adam(list(self.critics[-1].parameters()), lr=config.lr_critic))
+        curr_nodes = [Node(i, "agent", obs_b[0][0][i]) for i in range(len(obs_b[0][0]))]
+        curr_nodes += [Node(i + self.num_blue, "adversarial", obs_b[1][0][i]) for i in range(len(obs_b[1][0]))]
+        curr_nodes += [Node(self.num_blue + self.num_red, "land", config.island_position + [0,1])]
+
+        edge_index, edge_attr = initialize_edge_features(curr_nodes)
+        node_tensors = torch.stack([node.to_tensor() for node in curr_nodes])
+        data = Data(x=node_tensors, edge_index=edge_index, edge_attr=edge_attr)
+  
+        
+
+        self.actor_nn = MLP(in_channels=out_channels_node, out_channels=mlp_out_channels)
+        self.critic_gnn = GNNModel(config, num_features + 2, out_channels_node)
+        self.critic_nn = MLP(in_channels=out_channels_node, out_channels=mlp_out_channels)
+        self.actor_optimizer = Adam(list(self.actor_nn.parameters()), lr=config.lr_actor)
+        self.critic_optimizer = Adam(list(self.critic_nn.parameters()), lr=config.lr_critic)
 
         self.replay_memory = ReplayMemory(config)
      
-    def get_action(self, state, is_training = True):
-        state_blue, state_red = state
-
-        state_b = state_blue.view(-1, state_blue.shape[-1])  # Shape: [2, 4]
-        state_r = state_red.view(-1, state_red.shape[-1])  # Shape: [1, 4]
-
-        x = torch.cat([state_b, state_r], dim=0)  # Shape: [3, 4]
+    def get_action(self, observation, is_training = True):
 
 
-        edge_index, edge_attr = build_edge_index(x, self.communication_range, self.observation_range, self.attack_range)
+        curr_nodes = [Node(i, "agent", observation[0][0][i]) for i in range(len(observation[0][0]))]
+        curr_nodes += [Node(i + self.num_blue, "adversarial", observation[1][0][i]) for i in range(len(observation[1][0]))]
+        curr_nodes += [Node(self.num_blue + self.num_red, "land", self.island_position + [0,1])]
 
-        actions = []
+        edge_index, edge_attr = initialize_edge_features(curr_nodes)
 
-        for i, model in enumerate(self.actors):
-            if is_training:
-                noise = torch.normal(mean=0, std= self.noise, size = (1,1))
-            else:
-                noise = 0 
- 
-            batch = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+        node_tensors = torch.stack([node.to_tensor() for node in curr_nodes])
 
-            actions.append(model(batch)[i] + noise)
+        data = Data(x=node_tensors, edge_index=edge_index, edge_attr=edge_attr)
 
-        concatenated_tensor = torch.cat(actions, dim=1)
+        # Update Graph NN
+        embedding = self.actor_gnn(data)
 
-        return concatenated_tensor
+        if is_training:
+            noise = torch.normal(mean=0, std= self.noise, size = (1, self.num_blue)) # To Do
+        else:
+            noise = 0 
+
+        # Hand over to MLP
+
+        actions = self.actor_nn(embedding[:self.num_blue]).T + noise 
+
+        return actions
     
     def update(self):
         # Enough data stored to update
@@ -768,3 +801,47 @@ class HeuristicBluePolicy:
     
 
 
+class ActorNetwork(nn.Module):
+    def __init__(self, state_dim):
+        super(ActorNetwork, self).__init__()
+        self.fc1 = nn.Linear(state_dim * 4 , 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.fc3 = nn.Linear(64, 1)
+    
+    def forward(self, state_b, state_r):
+        if state_b.dim() == 3:
+            state_b = state_b.unsqueeze(0)
+        if state_r.dim() == 3:
+            state_r = state_r.unsqueeze(0)
+
+        state = torch.cat([state_b, state_r], dim=2) 
+        state = torch.flatten(state, start_dim=2)
+        x = torch.relu(self.fc1(state))
+        x = torch.relu(self.fc2(x))
+        action_value = self.fc3(x).squeeze(-1)
+        return action_value
+
+class CriticNetwork(nn.Module):
+    def __init__(self, state_dim, num_blue):
+        super(CriticNetwork, self).__init__()
+        self.fc1 = nn.Linear(state_dim * 4 + num_blue, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.fc3 = nn.Linear(64, 1)
+    
+    def forward(self, state_b, state_r, action):
+        if state_b.dim() == 3:
+            state_b = state_b.unsqueeze(0)
+        if state_r.dim() == 3:
+            state_r = state_r.unsqueeze(0)
+        if action.dim() == 1:
+            action = action.unsqueeze(0)
+        if action.dim() == 2:
+            action = action.unsqueeze(-1)
+
+        state = torch.cat([state_b, state_r], dim=2) 
+        state = torch.flatten(state, start_dim=2) 
+        x = torch.cat([state, action], dim=-1) 
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        state_value = self.fc3(x).squeeze(-1)
+        return state_value

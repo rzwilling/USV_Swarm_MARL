@@ -37,6 +37,10 @@ if __name__ == '__main__':
 
     # Set up environment and agents
     env = USVEnv(config)
+    time_start = time.time()
+    obs_b, obs_r = env.reset()
+
+
     agent_red = PigeonRed(config)
 
     mc = 4
@@ -47,14 +51,14 @@ if __name__ == '__main__':
     elif mc == 3:
         agent_blue = DDPG(config)
     elif mc == 4:
-        agent_blue = MADDPG(config, agent_red)
+        agent_blue = MADDPG(config, obs_b, obs_r)
 
 
 
 
     # Evaluation loop
-    time_start = time.time()
-    obs_b, obs_r = env.reset()
+
+    #self.blue_x, self.blue_y, self.blue_yaw, self.blue_alive
     cnt = 0
     step = 0
 
