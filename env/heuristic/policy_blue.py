@@ -169,6 +169,7 @@ class GNNCommunicationLayer(MessagePassing):
         self.observation_range = config.blue_detect_range
         self.attack_range = config.attack_range
         self.communication_range = config.communication_range
+        self.agent_teams = False
 
     def forward(self, output_x, data):
 
@@ -177,16 +178,28 @@ class GNNCommunicationLayer(MessagePassing):
 
 
         agent_idx = [i for i, row in enumerate(x) if row[0] == 0]
+
+
         agent_mask = torch.isin(edge_index[1], torch.tensor(agent_idx))
 
+
+        if self.agent_teams:
+            row_x = edge_index[0, :]
+            row_y = edge_index[1, :]
+
+            # Calculate the mask
+            mask = (row_x // 4 == row_y // 4) | ((row_x % 4 == 0) & (row_y % 4 == 0))
+
+            agent_mask = agent_mask & mask 
+
         agent_output = self.propagate(edge_index[:, agent_mask], x = z, edge_attr=edge_attr[agent_mask, :]) #  this calls message method
+
 
         result = torch.cat((x, agent_output), dim=1)
 
         return result
 
     def message(self, x_j, x_i, edge_attr):
-
 
         message = self.message_function(x_i, x_j, edge_attr)
         distance = edge_attr[:, 0]
