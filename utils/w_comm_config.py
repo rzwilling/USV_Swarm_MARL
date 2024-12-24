@@ -4,14 +4,14 @@ import numpy as np
 
 class Config:
 
-    exp_big_name = "old_w_comm_team"
+    exp_big_name = "old_w_comm"
 
     do_visualize_online = False
     do_visualize_traj = False  # when you visualize online, visualize trajectory will not work.
     do_visualize_traj_freq = 10
     root_path = 'results/temp'
     comm_layer = True
-    team_reward_layer = True
+    team_reward_layer = False
     agent_teams = False
 
     random_seed = 42

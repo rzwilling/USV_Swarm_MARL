@@ -7,7 +7,6 @@ from torch_geometric.data import Data, Batch
 from torch_geometric.loader import DataLoader
 import time
 
-from env.utils.gnn_utils import build_edge_index
 torch.autograd.set_detect_anomaly(True)
 
 
@@ -19,13 +18,12 @@ class Node:
 
         self.node_id = node_id
         self.node_type = type_dict[node_type]  # 'agent', 'adversarial', 'land'
-        self.x = features[0]          # Only for agent nodes
-        self.y = features[1]          # Only for agent nodes
+        self.x = features[0]          
+        self.y = features[1]          
         self.yaw = features[2]
         self.alive = features[3]
 
     def to_tensor(self):
-        # Return a tensor of node features (x, y, yaw, alive)
         return torch.tensor([self.node_type, self.x, self.y, self.yaw, self.alive], dtype=torch.float)
 
 
@@ -34,11 +32,10 @@ def initialize_edge_features(nodes):
     edge_index = []
     edge_attr = []
     
-    # Loop through all pairs of nodes to create edges
     for i, node_i in enumerate(nodes):
         for j, node_j in enumerate(nodes):
             if i != j:
-                # Compute distance, bearing, and relative orientation between node_i and node_j
+                
                 distance = np.linalg.norm(np.array([node_i.x, node_i.y]) - np.array([node_j.x, node_j.y]))
                 bearing = np.arctan2(node_j.y - node_i.y, node_j.x - node_i.x) - node_i.yaw
                 relative_orientation =np.arctan2(node_i.y - node_j.y, node_i.x - node_j.x) - node_j.yaw
@@ -48,74 +45,60 @@ def initialize_edge_features(nodes):
                 edge_index.append([node_i.node_id, node_j.node_id])
                 edge_attr.append(edge_feature)
 
-      # Convert to PyTorch tensors
-    edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()  # Transpose to match PyTorch Geometric format
-    edge_attr = torch.stack(edge_attr, dim=0)  # Stack the edge features into a tensor
+    edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()  
+    edge_attr = torch.stack(edge_attr, dim=0)  
                   
     
     return edge_index, edge_attr
 
 
+# Message Calculation for Embedding Layer
 class MessageUpdateFunction(nn.Module):
     def __init__(self, in_channels, in_channels_edge, out_channels):
         super(MessageUpdateFunction, self).__init__()
         self.mlp = torch.nn.Sequential(
-            torch.nn.Linear(in_channels * 2 + in_channels_edge, 32),  # Input size is the sum of features from vi, vj, and eji
+            torch.nn.Linear(in_channels * 2 + in_channels_edge, 32),  
             torch.nn.ReLU(),
-            torch.nn.Linear(32, out_channels)  # Output size is the node feature dimension
+            torch.nn.Linear(32, out_channels) 
         )
-    def forward(self, v_i, v_j, e_ij):
-        # Kombiniere Knotenmerkmale und Kantenmerkmale
-        combined = torch.cat([v_i, v_j, e_ij], dim=-1)
+    def forward(self, in_node, out_node, edge_feat):
+        combined = torch.cat([in_node, out_node, edge_feat], dim=-1)
         return self.mlp(combined)
     
+
+# Message Calculation for COmmunication Layer
 class MessageUpdateFunction2(nn.Module):
     def __init__(self, in_channels, in_channels_edge, out_channels):
         super(MessageUpdateFunction2, self).__init__()
         self.mlp = torch.nn.Sequential(
-            torch.nn.Linear(in_channels * 2 + in_channels_edge, 32),  # Input size is the sum of features from vi, vj, and eji
+            torch.nn.Linear(in_channels * 2 + in_channels_edge, 32),  
             torch.nn.ReLU(),
-            torch.nn.Linear(32, out_channels)  # Output size is the node feature dimension
+            torch.nn.Linear(32, out_channels) 
         )
-    def forward(self, v_i, v_j, e_ij):
-        # Kombiniere Knotenmerkmale und Kantenmerkmale
-        combined = torch.cat([v_i, v_j, e_ij], dim=-1)
+    def forward(self, in_node, out_node, edge_feat):
+        combined = torch.cat([in_node, out_node, edge_feat], dim=-1)
         return self.mlp(combined)
 
-
-# Knoten-Update-Funktion für das Zustands-Embedding
-class NodeUpdateFunction(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(NodeUpdateFunction, self).__init__()
-        self.fc = nn.Linear(in_channels + out_channels, out_channels)
-
-    def forward(self, v_i, aggregated_messages):
-        # Kombiniere Knotenmerkmale und aggregierte Nachrichten
-        combined = torch.cat([v_i, aggregated_messages], dim=-1)
-        return self.fc(combined)
 
 
 
 class GNNModel(nn.Module):
     def __init__(self, config, in_channels, out_channels):
         super(GNNModel, self).__init__()
-        self.conv1 = GNNEmbeddingLayer(config, in_channels, 3, out_channels)  # Erste Convolution-Schicht
+        self.conv1 = GNNEmbeddingLayer(config, in_channels, 3, out_channels)  
         self.comm_layer = config.comm_layer
-        self.conv2 = nn.Linear(16*3 + 5, 16)
+        self.conv2 = nn.Linear(16*3 + 5, 16) # 16 features for each node type + 5 initial feature
 
         if self.comm_layer:
-            self.conv3 = GNNCommunicationLayer(config, in_channels + 16, 3, out_channels)  # Erste Convolution-Schicht
+            self.conv3 = GNNCommunicationLayer(config, in_channels + 16, 3, out_channels) 
             self.conv4 = nn.Linear(16 + 5, 16)
-        #self.conv2 = GCNConv(16, out_channels)  # Zweite Convolution-Schicht
 
     def forward(self, data):
 
-        # Erste Convolution
         x = self.conv1(data)
-        x = torch.relu(x)  # Aktivierungsfunktion
+        x = torch.relu(x)  
         x = self.conv2(x)
 
-        # Zweite Convolution
         if self.comm_layer:
             x = self.conv3(x, data)
 
@@ -126,18 +109,15 @@ class GNNModel(nn.Module):
 
 
 
-# GNN Layer für die Kantenaktualisierung und Knotenaktualisierung
 class GNNEmbeddingLayer(MessagePassing):
     def __init__(self, config, in_channels_node, in_channels_edge, out_channels_node):
         super(GNNEmbeddingLayer, self).__init__(aggr='sum') 
 
         self.message_function = MessageUpdateFunction(in_channels_node, in_channels_edge, out_channels_node)
-        #self.node_update_function = NodeUpdateFunction(in_channels_node, out_channels_node)
         self.observation_range = config.blue_detect_range
         self.attack_range = config.attack_range
 
     def forward(self, data):
-        # Knotenfeatures und Kantenfeatures weitergeben
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
 
         #agent_idx = [i for i, row in enumerate(x) if row[0] == 0]
@@ -158,8 +138,7 @@ class GNNEmbeddingLayer(MessagePassing):
         return result
 
     def message(self, x_j, x_i, edge_attr):
-        # Nachrichten von den Nachbarknoten (edge_attr sind die Kantenfeatures)
-        #distance, bearing, relative_orientation = edge_attr
+
 
         message = self.message_function(x_i, x_j, edge_attr)
 
@@ -180,19 +159,18 @@ class GNNEmbeddingLayer(MessagePassing):
 
 
    
-#GNN Layer für die Kantenaktualisierung und Knotenaktualisierung
 class GNNCommunicationLayer(MessagePassing):
     def __init__(self, config, in_channels_node, in_channels_edge, out_channels_node):
         super(GNNCommunicationLayer, self).__init__(aggr='sum') 
 
+        # Encode message
         self.message_function = MessageUpdateFunction2(in_channels_node, in_channels_edge, out_channels_node)
-        #self.node_update_function = NodeUpdateFunction(in_channels_node, out_channels_node)
+
         self.observation_range = config.blue_detect_range
         self.attack_range = config.attack_range
         self.communication_range = config.communication_range
 
     def forward(self, output_x, data):
-        # Knotenfeatures und Kantenfeatures weitergeben
 
         x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
         z = torch.cat((data.x,output_x), dim=1)
@@ -200,15 +178,15 @@ class GNNCommunicationLayer(MessagePassing):
 
         agent_idx = [i for i, row in enumerate(x) if row[0] == 0]
         agent_mask = torch.isin(edge_index[1], torch.tensor(agent_idx))
-        agent_output = self.propagate(edge_index[:, agent_mask], x = z, edge_attr=edge_attr[agent_mask, :])
+
+        agent_output = self.propagate(edge_index[:, agent_mask], x = z, edge_attr=edge_attr[agent_mask, :]) #  this calls message method
 
         result = torch.cat((x, agent_output), dim=1)
 
         return result
 
     def message(self, x_j, x_i, edge_attr):
-        # Nachrichten von den Nachbarknoten (edge_attr sind die Kantenfeatures)
-        #distance, bearing, relative_orientation = edge_attr
+
 
         message = self.message_function(x_i, x_j, edge_attr)
         distance = edge_attr[:, 0]
@@ -222,23 +200,24 @@ class GNNCommunicationLayer(MessagePassing):
 class MLP(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(MLP, self).__init__()
-        self.fc1 = nn.Linear(in_channels, 64)  # Erste Schicht
-        self.fc2 = nn.Linear(64, 64)  # Zweite Schicht
-        self.fc3 = nn.Linear(64, out_channels)  # Ausgabe-Schicht
+        self.fc1 = nn.Linear(in_channels, 64) 
+        self.fc2 = nn.Linear(64, 64)  
+        self.fc3 = nn.Linear(64, out_channels)  
         self.relu = nn.ReLU()
 
     def forward(self, x):
         x = self.relu(self.fc1(x))
         x = self.relu(self.fc2(x))
-        x = self.fc3(x)  # Keine Aktivierungsfunktion am Ausgang, falls es sich um ein Regressionsproblem handelt
+        x = self.fc3(x)  
         return x
 
+# For Critic: takes one more input(action)
 class MLP_Q(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(MLP_Q, self).__init__()
-        self.fc1 = nn.Linear(in_channels + 1, 64)  # Erste Schicht
-        self.fc2 = nn.Linear(64, 64)  # Zweite Schicht
-        self.fc3 = nn.Linear(64, out_channels)  # Ausgabe-Schicht
+        self.fc1 = nn.Linear(in_channels + 1, 64)  
+        self.fc2 = nn.Linear(64, 64)  
+        self.fc3 = nn.Linear(64, out_channels)  
         self.relu = nn.ReLU()
 
     def forward(self, x, y):
@@ -246,7 +225,7 @@ class MLP_Q(nn.Module):
         x = torch.cat([x, y.T], dim=1) 
         x = self.relu(self.fc1(x))
         x = self.relu(self.fc2(x))
-        x = self.fc3(x)  # Keine Aktivierungsfunktion am Ausgang, falls es sich um ein Regressionsproblem handelt
+        x = self.fc3(x)  
         return x
 
 

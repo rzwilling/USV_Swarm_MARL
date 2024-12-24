@@ -32,7 +32,7 @@ agent_blue = MADDPG(loaded_config)
 
 
 #load_model(agent_blue, f'maddpg_model_{step}.pth')
-load_model(agent_blue, r'C:\Users\rvmzw\Documents\GitHub\USV_Swarm_MARL\saved_models\old_w_communication_Test_673_model_50.pth')
+load_model(agent_blue, r'C:\Users\rvmzw\Documents\GitHub\USV_Swarm_MARL\results_for_analysis\old_w_comm_team_724_model_49999.pth')
 
 step = 0
 while True:

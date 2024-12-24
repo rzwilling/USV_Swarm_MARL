@@ -104,7 +104,7 @@ if __name__ == '__main__':
             if step % 40 == 0:
                 agent_blue.update()
 
-        if step + 1 % 50000 == 0: # 1000
+        if (step + 1) % 50000 == 0: # 1000
             save_model(agent_blue, f'./saved_models/{config.exp_big_name}_{config.exp_name}_model_{step}.pth')
             #load_model(agent_blue, f'maddpg_model_{step}.pth')
         
