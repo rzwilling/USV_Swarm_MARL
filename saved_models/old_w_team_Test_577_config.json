@@ -1,0 +1,7 @@
+{
+    "exp_name": "Test_577",
+    "red_policy_mode": 1,
+    "train_model_mode": false,
+    "num_env": 1,
+    "root_path": "results\\Test_577"
+}
